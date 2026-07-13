@@ -9,6 +9,8 @@ describe('formatEvent', () => {
   it('renders spawn, message, usage, terminal events; hides task.state and tool.called', () => {
     expect(formatEvent(ev('node.spawned', { nodeId: 'captain', role: 'captain', provider: 'anthropic', model: 'claude-sonnet-4-5' })))
       .toContain('captain spawned (anthropic/claude-sonnet-4-5)');
+    expect(formatEvent(ev('node.spawned', { nodeId: 'crew-2', driver: 'codex' })))
+      .toContain('crew-2 spawned (codex)');
     expect(formatEvent(ev('message', { kind: 'ESCALATE', from: 'crew-1', to: 'captain', taskId: 't2', text: 'include non-ICU?' })))
       .toContain('ESCALATE');
     expect(formatEvent(ev('usage', { nodeId: 'captain', costUsd: 0.021 }))).toContain('+$0.0210');

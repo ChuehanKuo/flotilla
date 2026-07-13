@@ -12,7 +12,8 @@ export function formatEvent(e: FleetEvent): string | null {
     case 'mission.started': return `${clock(e.ts)} ${pc.bold('▸')} mission ${e.missionId} started: ${d.order}`;
     case 'node.spawned': {
       const from = d.parentId ? ` ${pc.dim('← ' + d.parentId)}` : '';
-      return `${clock(e.ts)} ${pc.green('+')} ${pc.bold(d.nodeId)} spawned (${d.provider}/${d.model})${from}`;
+      const runtime = d.provider ? `${d.provider}/${d.model}` : String(d.driver ?? 'unknown');
+      return `${clock(e.ts)} ${pc.green('+')} ${pc.bold(d.nodeId)} spawned (${runtime})${from}`;
     }
     case 'message': {
       const icon = KIND_ICON[d.kind] ?? '·';

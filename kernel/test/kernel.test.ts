@@ -25,6 +25,7 @@ describe('Mission happy path', () => {
     // captain defaults to claude-code; both crew were delegated onto the api driver
     expect(refs.map((r: any) => r.driver)).toEqual(['claude-code', 'api', 'api']);
     expect(refs.slice(1).map((r: any) => r.provider)).toEqual(['anthropic', 'openai']);
+    expect(refs.slice(1).map((r: any) => r.model)).toEqual(['claude-sonnet-5', 'gpt-5.6-sol']);
     const s = mission.state();
     expect(Object.keys(s.nodes)).toHaveLength(3); // captain + 2 crew
     expect(s.totalCostUsd).toBeGreaterThan(0);

@@ -1,6 +1,6 @@
 import type { FleetEvent, TaskState } from './types.js';
 
-export interface NodeView { id: string; parentId?: string; role: string; provider: string; model: string; taskId: string; costUsd: number; lastTs: string }
+export interface NodeView { id: string; parentId?: string; role: string; provider?: string; model?: string; driver?: string; taskId: string; costUsd: number; lastTs: string }
 export interface TaskView { id: string; parentTaskId?: string; assignee: string; state: TaskState }
 export interface EscalationView { taskId: string; from: string; text: string }
 export interface FleetState {
@@ -23,7 +23,7 @@ export function reduce(events: FleetEvent[]): FleetState {
     switch (e.type) {
       case 'mission.started': s.order = d.order; break;
       case 'node.spawned':
-        s.nodes[d.nodeId] = { id: d.nodeId, parentId: d.parentId, role: d.role, provider: d.provider, model: d.model, taskId: d.taskId, costUsd: 0, lastTs: e.ts };
+        s.nodes[d.nodeId] = { id: d.nodeId, parentId: d.parentId, role: d.role, provider: d.provider, model: d.model, driver: d.driver, taskId: d.taskId, costUsd: 0, lastTs: e.ts };
         break;
       case 'task.state': {
         const prev = s.tasks[d.taskId];

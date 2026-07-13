@@ -92,7 +92,7 @@ export class Mission {
     const nodeId = captain ? 'captain' : `${role.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${this.counter}`;
     const taskId = `t${this.counter}`;
     const parentTaskId = parentId === 'operator' ? undefined : this.nodes.get(parentId)?.spec.taskId;
-    this.log.append('node.spawned', { nodeId, parentId: parentId === 'operator' ? undefined : parentId, role, provider: ref.provider, model: ref.model, taskId });
+    this.log.append('node.spawned', { nodeId, parentId: parentId === 'operator' ? undefined : parentId, role, driver: ref.driver, provider: ref.provider, model: ref.model, taskId });
     this.log.append('task.state', { taskId, parentTaskId, assignee: nodeId, state: 'submitted' });
 
     const api: KernelApi = {
