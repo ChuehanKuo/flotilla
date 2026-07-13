@@ -12,11 +12,16 @@ export type Command =
 // WHY only the LAST fenced ```flotilla block: CLI-driver transcripts often show their
 // reasoning inline before settling on a final action; treating every block as a command
 // would double-execute draft attempts the model itself abandoned.
-// WHY the closing fence must begin a line (\n```): inside valid JSON, newlines in string
-// values are \n escapes, so a line-start ``` can never occur within the payload — an
-// embedded "``` code ```" in delivered text cannot truncate the block. Inline
-// single-line blocks no longer match (acceptable: they fall through to no commands).
-const FENCE_RE = /```flotilla\s*\n([\s\S]*?)\n```/g;
+// WHY both the opening AND closing fence must begin a line ((?:^|\n)``` / \n```):
+// inside valid JSON, newlines in string values are \n escapes, so a line-start ```
+// can never occur within the payload — an embedded "``` code ```" in delivered text
+// cannot truncate the block. Inline single-line blocks no longer match (acceptable:
+// they fall through to no commands). Anchoring only the close (as before) left a gap:
+// neutralizeFences prefixes echoed line-start ``` with a space, but an unanchored
+// opening still matched that "```flotilla" wherever it fell in the string, letting a
+// neutralized (attacker-echoed) block re-open as if genuine. No `m` flag is used —
+// `(?:^|\n)` gets line-start semantics without it.
+const FENCE_RE = /(?:^|\n)```flotilla\s*\n([\s\S]*?)\n```/g;
 
 export function parseCommands(text: string): { commands: Command[]; cleanText: string } {
   let last: RegExpExecArray | null = null;

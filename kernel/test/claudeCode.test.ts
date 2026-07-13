@@ -57,7 +57,7 @@ describe('ClaudeCodeDriver', () => {
       '-p', 'do the thing',
       '--output-format', 'json',
       '--append-system-prompt', `You are captain.\n\n${PROTOCOL_INSTRUCTIONS}`,
-      '--allowedTools', 'Read,Write,Edit,Glob,Grep',
+      '--allowedTools', 'Read(**),Write(**),Edit(**),Glob,Grep',
     ]);
     expect(args).not.toContain('--resume');
     expect(out).toEqual({
@@ -83,7 +83,7 @@ describe('ClaudeCodeDriver', () => {
       '-p', 'turn two',
       '--output-format', 'json',
       '--resume', 'sess-abc',
-      '--allowedTools', 'Read,Write,Edit,Glob,Grep',
+      '--allowedTools', 'Read(**),Write(**),Edit(**),Glob,Grep',
     ]);
   });
 

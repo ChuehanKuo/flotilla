@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { EventLog } from './log.js';
 import { reduce, type FleetState } from './reducer.js';
 import { BudgetTracker, BudgetExceededError } from './budget.js';
@@ -45,11 +45,19 @@ export class Mission {
     this.id = `m-${Date.now().toString(36)}`;
     if (deps.missionsDir) {
       const dir = join(deps.missionsDir, this.id);
-      this.workspaceDir = join(dir, 'workspace');
+      // WHY resolve(): a relative missionsDir (e.g. supplied as a bare CLI arg)
+      // left workspaceDir relative, which broke two things — resolveSafe()
+      // (tools/files.ts) compares an absolute resolve(workspaceDir, path)
+      // against workspaceDir itself, so every file op was rejected as
+      // "path escapes workspace"; and codex's `--cd` needs an absolute path,
+      // which was the live P6 workspace-path fault.
+      this.workspaceDir = resolve(join(dir, 'workspace'));
       mkdirSync(this.workspaceDir, { recursive: true });
       this.log = new EventLog(this.id, join(dir, 'events.jsonl'));
     } else {
-      this.workspaceDir = mkdtempSync(join(tmpdir(), 'flotilla-ws-'));
+      // mkdtempSync already returns absolute; resolve() here is a no-op kept
+      // for uniformity so workspaceDir is provably absolute either branch.
+      this.workspaceDir = resolve(mkdtempSync(join(tmpdir(), 'flotilla-ws-')));
       this.log = new EventLog(this.id);
     }
     this.budget = new BudgetTracker(config.pricing, config.budgetUsd);

@@ -77,6 +77,14 @@ export class ClaudeCodeDriver implements TurnDriver {
     const auth = this.sessionId
       ? ['--resume', this.sessionId]
       : ['--append-system-prompt', `${system}\n\n${PROTOCOL_INSTRUCTIONS}`];
-    return ['-p', promptText, '--output-format', 'json', ...auth, '--allowedTools', 'Read,Write,Edit,Glob,Grep'];
+    // WHY Tool(**) not bare Tool names: unscoped Read/Write/Edit let the CLI
+    // touch any path reachable from its own permission model, not just this
+    // node's mission workspace. Permission rules take a `Tool(specifier)`
+    // glob scoped to cwd (verified via `claude --help`'s own allowedTools
+    // example and the CLI's rule-format validation message, which both cite
+    // gitignore-style relative globs, e.g. "Edit(docs/**)"); since cwd is
+    // already workspaceDir (see execFile's `cwd` below), `**` scopes every
+    // Read/Write/Edit to inside it. Glob/Grep stay unscoped (read-only search).
+    return ['-p', promptText, '--output-format', 'json', ...auth, '--allowedTools', 'Read(**),Write(**),Edit(**),Glob,Grep'];
   }
 }

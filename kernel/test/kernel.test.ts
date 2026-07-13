@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { Mission } from '../src/kernel.js';
 import { defaultConfig } from '../src/types.js';
 import { AiSdkDriver } from '../src/driver.js';
@@ -83,5 +85,36 @@ describe('Mission happy path', () => {
     expect(res.status).toBe('completed');
     const s = mission.state();
     expect(Object.keys(s.nodes)).toHaveLength(2); // captain + only 1 crew
+  });
+
+  it('a relative missionsDir still yields a workspace crew file tools can actually write into (workspaceDir resolved absolute)', async () => {
+    // WHY relative missionsDir: resolveSafe (tools/files.ts) compares an absolute
+    // resolve(workspaceDir, path) against workspaceDir itself — if workspaceDir is
+    // left relative, that comparison can never match and every file op is rejected
+    // as "path escapes workspace". A relative missionsDir here reproduces exactly
+    // that path, regardless of what directory the test runner's cwd happens to be.
+    const relDir = `relmiss-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const captain = scriptedModel([
+      { toolName: 'delegate', input: { role: 'writer', charter: 'Write a file.', task: 'write it' } },
+      { text: 'FINAL: done' },
+    ]);
+    let first = true;
+    const driverFactory = () =>
+      new AiSdkDriver(first
+        ? ((first = false), captain)
+        : scriptedModel([
+            { toolName: 'write_file', input: { path: 'note.txt', content: 'hi' } },
+            { toolName: 'deliver', input: { text: 'wrote it' } },
+            { text: '' },
+          ]));
+    const mission = new Mission('x', defaultConfig(), { driverFactory, missionsDir: relDir });
+    try {
+      const res = await mission.start();
+      expect(res.status).toBe('completed');
+      const written = readFileSync(join(relDir, mission.id, 'workspace', 'note.txt'), 'utf8');
+      expect(written).toBe('hi');
+    } finally {
+      rmSync(relDir, { recursive: true, force: true });
+    }
   });
 });
