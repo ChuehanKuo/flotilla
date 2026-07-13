@@ -6,3 +6,4 @@ export { realModelFactory, type ModelFactory, type DriverFactory } from './provi
 export { AiSdkDriver, type TurnDriver, type TurnInput, type TurnOutput } from './driver.js';
 export { Mission, type MissionDeps, type MissionResult } from './kernel.js';
 export { parseCommands, executeCommands, PROTOCOL_INSTRUCTIONS, type Command } from './protocol.js';
+export { ClaudeCodeDriver, type ClaudeCodeDriverOptions } from './drivers/claudeCode.js';
