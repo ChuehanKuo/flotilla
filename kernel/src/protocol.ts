@@ -116,6 +116,15 @@ export async function executeCommands(commands: Command[], tools: ToolSet): Prom
 export const PROTOCOL_INSTRUCTIONS = `To act, end your response with a single fenced code block labeled "flotilla" containing
 a JSON object of the shape {"commands": [...]}. Only the LAST such block in your response
 is read — everything else is your own reasoning and is ignored by the protocol parser.
+
+CRITICAL — how execution works: nothing you write DURING your session executes anything.
+Only your FINAL message is handed to the protocol parser, exactly once, after your whole
+session ends. A flotilla block in an earlier or intermediate message does NOTHING and is
+never "already dispatched" — if you intend commands this turn, the block MUST appear at
+the end of your FINAL message, every turn, even if you believe you already wrote one.
+The only proof a command executed is a [command results] acknowledgment at the start of
+a later turn; absent that, re-issue the block.
+
 The opening \`\`\`flotilla and closing \`\`\` must each start and end on their own line,
 and you must never place a raw \`\`\` at the start of a line inside the JSON (escape
 newlines in string values as \\n, so this cannot happen in valid JSON).
