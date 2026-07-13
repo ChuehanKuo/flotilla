@@ -20,7 +20,7 @@
 - If the installed AI SDK minor version's shapes differ from this plan (e.g. mock result fields), consult `node_modules/ai/test.d.ts` and adapt the mocks/plumbing — never the test assertions' observable behavior.
 - All commits end with:
   `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
-- Run all tests from repo root with `npx vitest run` (workspaces are auto-discovered via `vitest.workspace.ts`).
+- Run all tests from repo root with `npx vitest run` (workspaces are auto-discovered via `test.projects` in root `vitest.config.ts` — the separate workspace file is deprecated in vitest 3).
 
 ## File Structure
 
@@ -59,7 +59,7 @@ cli/
 ### Task 1: Monorepo scaffold
 
 **Files:**
-- Create: `package.json`, `tsconfig.base.json`, `vitest.workspace.ts`, `kernel/package.json`, `kernel/tsconfig.json`, `cli/package.json`, `cli/tsconfig.json`, `kernel/test/smoke.test.ts`
+- Create: `package.json`, `tsconfig.base.json`, `vitest.config.ts`, `kernel/package.json`, `kernel/tsconfig.json`, `cli/package.json`, `cli/tsconfig.json`, `kernel/test/smoke.test.ts`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -74,6 +74,7 @@ cli/
   "private": true,
   "type": "module",
   "workspaces": ["kernel", "cli"],
+  "engines": { "node": ">=20" },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -b kernel cli"
@@ -102,9 +103,10 @@ cli/
 }
 ```
 
-`vitest.workspace.ts`:
+`vitest.config.ts`:
 ```ts
-export default ['kernel', 'cli'];
+import { defineConfig } from 'vitest/config';
+export default defineConfig({ test: { projects: ['kernel', 'cli'] } });
 ```
 
 - [ ] **Step 2: Workspace manifests**
@@ -168,7 +170,7 @@ Expected: 1 test file, 1 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add package.json tsconfig.base.json vitest.workspace.ts kernel cli package-lock.json
+git add package.json tsconfig.base.json vitest.config.ts kernel cli package-lock.json
 git commit -m "chore: scaffold npm-workspaces monorepo (kernel, cli)"
 ```
 
