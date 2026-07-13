@@ -28,6 +28,10 @@ export class ClaudeCodeDriver implements TurnDriver {
   constructor(private readonly opts: ClaudeCodeDriverOptions) {}
 
   async turn(input: TurnInput): Promise<TurnOutput> {
+    // WHY promptText never begins with '-': node.ts formats every incoming batch
+    // as `[KIND from …]` lines (and pending results add a `[command results]`
+    // header), so `-p <text>` can't parse a leading token as a flag. If that
+    // upstream invariant ever changes, revisit this call site.
     const promptText = this.buildPromptText(input.newText);
     const args = this.buildArgs(promptText, input.system);
 
@@ -47,6 +51,11 @@ export class ClaudeCodeDriver implements TurnDriver {
     // silently-empty turn.
     const reply = JSON.parse(stdout) as ClaudeCliReply;
 
+    // The turn succeeded — only now drain the queue. A thrown execFile/JSON.parse
+    // above leaves it intact, so the node's retry of the same newText rebuilds
+    // the prompt with the same [command results] block instead of losing it.
+    this.pendingCommandResults = [];
+
     if (typeof reply.session_id === 'string') this.sessionId = reply.session_id;
     const resultText = typeof reply.result === 'string' ? reply.result : '';
     const usage = reply.usage ?? {};
@@ -64,15 +73,18 @@ export class ClaudeCodeDriver implements TurnDriver {
     };
   }
 
+  // Pure: never mutates pendingCommandResults — the queue is drained in turn()
+  // only after the CLI call succeeds, so a retried turn rebuilds the same prompt.
   private buildPromptText(newText: string): string {
-    // WHY neutralize here: a crew's delivered text can contain a raw line-start
-    // ``` fence (e.g. quoting code); if the captain's CLI echoes that text back
-    // verbatim, parseCommands must not mistake it for a real flotilla block on
-    // a later turn. Indenting by one space is cheap and reversible-by-eye.
-    const neutralized = newText.replace(/^```/gm, ' ```');
+    // WHY neutralize: text echoed into a prompt (a crew's delivered text, or an
+    // error branch's arbitrary err.message inside a command result) can contain
+    // a raw line-start ``` fence; if the CLI echoes it back verbatim,
+    // parseCommands must not mistake it for a real flotilla block on a later
+    // turn. Indenting by one space is cheap and reversible-by-eye.
+    const neutralize = (s: string) => s.replace(/^```/gm, ' ```');
+    const neutralized = neutralize(newText);
     if (this.pendingCommandResults.length === 0) return neutralized;
-    const header = `[command results]\n${this.pendingCommandResults.join('\n')}`;
-    this.pendingCommandResults = [];
+    const header = `[command results]\n${neutralize(this.pendingCommandResults.join('\n'))}`;
     return `${header}\n\n${neutralized}`;
   }
 

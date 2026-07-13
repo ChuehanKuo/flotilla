@@ -150,6 +150,29 @@ describe('ClaudeCodeDriver', () => {
     expect(prompt3).not.toContain('[command results]');
   });
 
+  it('preserves queued command results across a failed attempt and its retry', async () => {
+    const { logFile, replyFile, workspaceDir } = setup();
+    const tools = fakeTools({ report: vi.fn(async (a: any) => `reported: ${a.text}`) });
+    const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
+
+    setReply(replyFile, { result: '```flotilla\n{"commands":[{"cmd":"report","text":"halfway"}]}\n```', session_id: 's1', usage: {} });
+    await driver.turn(turnInput(tools, 'turn 1'));
+
+    // turn 2, attempt 1: CLI prints garbage → driver throws (the node will retry)
+    writeFileSync(replyFile, 'garbage not json');
+    await expect(driver.turn(turnInput(tools, 'turn 2'))).rejects.toThrow();
+
+    // turn 2, attempt 2: the node retries the SAME newText; the queued ack must survive
+    setReply(replyFile, { result: 'done', session_id: 's1', usage: {} });
+    await driver.turn(turnInput(tools, 'turn 2'));
+
+    const log = readLog(logFile);
+    const retryPrompt = log[2][log[2].indexOf('-p') + 1];
+    expect(retryPrompt).toContain('[command results]');
+    expect(retryPrompt).toContain('report → reported: halfway');
+    expect(retryPrompt).toContain('turn 2');
+  });
+
   it('neutralizes a raw line-start ``` fence in newText before it reaches the stub prompt', async () => {
     const { logFile, replyFile, workspaceDir } = setup();
     setReply(replyFile, { result: 'ok', session_id: 'sess-1', usage: { input_tokens: 1, output_tokens: 1 } });
