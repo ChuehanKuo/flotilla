@@ -3,6 +3,10 @@ import type { MissionConfig } from './types.js';
 export class BudgetExceededError extends Error {
   constructor(public spentUsd: number, public capUsd: number) {
     super(`budget exceeded: $${spentUsd.toFixed(2)} >= cap $${capUsd.toFixed(2)}`);
+    // WHY: the kernel identifies this error via String(err).includes(this.name)
+    // after it crosses the node retry boundary — the name is codebase-owned and
+    // cannot collide with provider error text the way the message could.
+    this.name = 'BudgetExceededError';
   }
 }
 

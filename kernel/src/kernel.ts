@@ -205,23 +205,28 @@ export class Mission {
   }
 
   private checkWatchdog(): void {
+    if (this.done) return;
     const s = this.state();
     const now = Date.now();
     for (const n of Object.values(s.nodes)) {
+      if (this.done) return; // a callback may have cancelled mid-loop
       if (this.watchdogFired.has(n.id)) continue;
       if (s.tasks[n.taskId]?.state !== 'working') continue;
       if (now - new Date(n.lastTs).getTime() < this.config.watchdogMs) continue;
       this.watchdogFired.add(n.id);
       this.log.append('watchdog', { nodeId: n.id });
       const text = `watchdog: ${n.id} silent for over ${Math.round(this.config.watchdogMs / 60_000)} min`;
+      this.log.append('message', { kind: 'ESCALATE', from: n.id, to: 'operator', taskId: n.taskId, text });
+      // WHY input-required: the operator's designed reply is answerEscalation(taskId, …);
+      // without this transition the ANSWER guard would silently drop that reply.
+      this.log.append('task.state', { taskId: n.taskId, state: 'input-required' });
       try { this.escalationCb?.({ taskId: n.taskId, from: n.id, text }); }
       catch { /* operator callback errors must not poison kernel routing */ }
-      this.log.append('message', { kind: 'ESCALATE', from: n.id, to: 'operator', taskId: n.taskId, text });
     }
   }
 
   private handleModelFailure(nodeId: string, error: string): void {
-    if (error.includes('budget exceeded')) {
+    if (error.includes('BudgetExceededError')) {
       this.finish({ status: 'failed', reason: 'budget-exceeded', totalCostUsd: this.budget.totalUsd }, 'mission.failed', { reason: 'budget-exceeded' });
       return;
     }

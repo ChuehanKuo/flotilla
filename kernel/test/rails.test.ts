@@ -62,6 +62,10 @@ describe('rails', () => {
     await vi.advanceTimersByTimeAsync(200_000);
     expect(seen.length).toBe(1);
     expect(seen[0].text).toContain('watchdog');
+    // watchdog escalations are answerable: the task pauses and an ANSWER resumes it
+    expect(mission.state().tasks[seen[0].taskId].state).toBe('input-required');
+    mission.answerEscalation(seen[0].taskId, 'keep going');
+    expect(mission.state().tasks[seen[0].taskId].state).toBe('working');
     mission.cancel('cleanup');
     await p;
     vi.useRealTimers();
