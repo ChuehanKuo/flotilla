@@ -86,6 +86,20 @@ describe('rails', () => {
     expect((audit[0].data as any).outcome).toBe('refused: max children reached');
   });
 
+  it('turn cap escalates to the operator once maxTurnsPerNode is exhausted', async () => {
+    const cfg = { ...defaultConfig(), maxTurnsPerNode: 0 };
+    const captain = scriptedModel([{ text: 'never reached' }]);
+    const mission = new Mission('x', cfg, { driverFactory: () => new AiSdkDriver(captain) });
+    const seen: any[] = [];
+    mission.onOperatorEscalation(e => seen.push(e));
+    const p = mission.start();
+    await new Promise(r => setTimeout(r, 10));
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0].text).toContain('TurnCapError');
+    mission.cancel('cleanup');
+    await p;
+  });
+
   it('ANSWER to an unknown or non-escalated task is ignored', async () => {
     const captain = scriptedModel([
       { toolName: 'escalate', input: { question: 'which scope?' } },

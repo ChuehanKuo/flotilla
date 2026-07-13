@@ -17,17 +17,21 @@ An event-sourced coordination kernel for hierarchical, multi-provider AI agent f
 
 ## Quickstart (v0.1)
 
+Flotilla's default config rides the agent CLIs you already have:
+[Claude Code](https://claude.com/claude-code) (`claude`) and OpenAI's Codex CLI
+(`codex`), each signed in on its own subscription — no API keys, $0 marginal.
+
 ```bash
 npm install
-export ANTHROPIC_API_KEY=sk-… OPENAI_API_KEY=sk-…
-npx tsx cli/src/index.ts run "your mission order here" --budget 2
+npx tsx cli/src/index.ts run "your mission order here"
 # re-watch any past mission:
 npx tsx cli/src/index.ts replay missions/<mission-id>/events.jsonl
 ```
 
-Every mission writes an append-only event log to `missions/<id>/events.jsonl` and a
-sandboxed crew workspace to `missions/<id>/workspace/`. Hard budget cap, depth cap,
-watchdog, and kill switch (Ctrl-C) are kernel-enforced.
+Prefer raw APIs? Point the config at the `api` driver and export
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`; the hard dollar cap applies there
+(`--budget`, default $5). Subscription nodes are bounded by per-node turn
+caps, depth caps, a watchdog, and mission timeouts instead.
 
 ## Protocol posture
 

@@ -39,6 +39,7 @@ export class Mission {
   private done = false;
   private timers: { watchdog?: NodeJS.Timeout; timeout?: NodeJS.Timeout } = {};
   private watchdogFired = new Set<string>();
+  private turnCounts = new Map<string, number>();
 
   constructor(private order: string, private config: MissionConfig, private deps: MissionDeps) {
     this.id = `m-${Date.now().toString(36)}`;
@@ -110,7 +111,16 @@ export class Mission {
         tools,
         log: this.log,
         maxStepsPerTurn: this.config.maxStepsPerTurn,
-        beforeModelCall: () => this.budget.assertUnderCap(),
+        // WHY a per-node counter here rather than in AgentNode: maxTurnsPerNode is
+        // a kernel-level rail (config), and node.ts's retry loop calls this once
+        // per attempt — a spent cap must fail every retry, not just the first, so
+        // the node's existing retry-then-escalate machinery surfaces it cleanly.
+        beforeModelCall: () => {
+          const n = (this.turnCounts.get(nodeId) ?? 0) + 1;
+          this.turnCounts.set(nodeId, n);
+          if (n > this.config.maxTurnsPerNode) throw new Error(`TurnCapError: ${nodeId} exceeded ${this.config.maxTurnsPerNode} turns`);
+          this.budget.assertUnderCap();
+        },
         onUsage: (id, usage, billing) => {
           const modelId = ref.model ?? (ref.provider ? this.config.models.apiDefaults[ref.provider] : 'unknown');
           const costUsd = billing === 'api' ? this.budget.addUsage(id, modelId, usage) : 0;

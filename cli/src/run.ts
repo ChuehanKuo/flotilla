@@ -1,7 +1,11 @@
 import { createInterface } from 'node:readline/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import pc from 'picocolors';
-import { Mission, defaultConfig, realModelFactory, AiSdkDriver, type DriverFactory } from '@flotilla/kernel';
+import { Mission, defaultConfig, realDriverFactory } from '@flotilla/kernel';
 import { formatEvent } from './render.js';
+
+const execFile = promisify(execFileCb);
 
 export async function runMission(order: string, opts: { budget?: string; missionsDir?: string }): Promise<number> {
   const config = defaultConfig();
@@ -16,26 +20,44 @@ export async function runMission(order: string, opts: { budget?: string; mission
     config.budgetUsd = cap;
   }
 
-  // WHY only 'api' refs: subscription-first defaults ship with claude-code/codex
-  // crew that never touch an API key; gating on the full crew list would demand
-  // ANTHROPIC_API_KEY/OPENAI_API_KEY for missions that never call those SDKs.
-  const apiRefs = [config.models.captain, ...config.models.crew].filter(ref => ref.driver === 'api');
-  const providersUsed = new Set(apiRefs.map(ref => ref.provider ?? 'anthropic'));
-  for (const p of providersUsed) {
-    const key = p === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
-    if (!process.env[key]) { console.error(pc.red(`missing ${key} in environment`)); return 1; }
+  // WHY here, not in realDriverFactory: kernel's delegate() already resolves an
+  // api ref's model from apiDefaults for crew spawned via the tool; the captain
+  // ref comes straight from config and is spawned directly (Mission.start()),
+  // bypassing that resolution — an api captain with no explicit model must be
+  // given one before realDriverFactory ever sees the ref.
+  if (config.models.captain.driver === 'api' && !config.models.captain.model) {
+    const provider = config.models.captain.provider ?? 'anthropic';
+    config.models.captain.model = config.models.apiDefaults[provider];
   }
 
-  // WHY temporary: claude-code/codex drivers land in P3/P4 — until then any
-  // non-api ref must fail loudly rather than silently falling through to the
-  // AI SDK with the wrong runtime.
-  const driverFactory: DriverFactory = (ref) => {
-    if (ref.driver !== 'api') throw new Error(`driver not implemented yet: ${ref.driver} (P3/P4)`);
-    return new AiSdkDriver(realModelFactory({ provider: ref.provider ?? 'anthropic', model: ref.model ?? config.models.apiDefaults[ref.provider ?? 'anthropic'] }));
-  };
+  // Preflight: gate on whatever driver kinds this run's config actually uses —
+  // 'api' needs its provider's key in env, 'claude-code'/'codex' need the CLI
+  // itself present and working (a missing/broken CLI would otherwise surface
+  // as a confusing execFile ENOENT deep inside the first node's first turn).
+  const kindsUsed = new Set([config.models.captain, ...config.models.crew].map(ref => ref.driver));
+
+  if (kindsUsed.has('api')) {
+    // WHY only 'api' refs: subscription-first defaults ship with claude-code/codex
+    // crew that never touch an API key; gating on the full crew list would demand
+    // ANTHROPIC_API_KEY/OPENAI_API_KEY for missions that never call those SDKs.
+    const apiRefs = [config.models.captain, ...config.models.crew].filter(ref => ref.driver === 'api');
+    const providersUsed = new Set(apiRefs.map(ref => ref.provider ?? 'anthropic'));
+    for (const p of providersUsed) {
+      const key = p === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
+      if (!process.env[key]) { console.error(pc.red(`missing ${key} in environment`)); return 1; }
+    }
+  }
+  if (kindsUsed.has('claude-code')) {
+    try { await execFile('claude', ['--version']); }
+    catch { console.error(pc.red(`'claude' CLI not found or not working — install Claude Code and sign in, or switch this node's driver to 'api'`)); return 1; }
+  }
+  if (kindsUsed.has('codex')) {
+    try { await execFile('codex', ['--version']); }
+    catch { console.error(pc.red(`'codex' CLI not found or not working — install the Codex CLI and sign in, or switch this node's driver to 'api'`)); return 1; }
+  }
 
   const missionsDir = opts.missionsDir ?? './missions';
-  const mission = new Mission(order, config, { driverFactory, missionsDir });
+  const mission = new Mission(order, config, { driverFactory: realDriverFactory, missionsDir });
   mission.log.subscribe(e => { const line = formatEvent(e); if (line) console.log(line); });
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
