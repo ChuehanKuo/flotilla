@@ -598,6 +598,10 @@ import type { MissionConfig } from './types.js';
 export class BudgetExceededError extends Error {
   constructor(public spentUsd: number, public capUsd: number) {
     super(`budget exceeded: $${spentUsd.toFixed(2)} >= cap $${capUsd.toFixed(2)}`);
+    // WHY: the kernel identifies this error via String(err).includes(this.name)
+    // after it crosses the node retry boundary — the name is codebase-owned and
+    // cannot collide with provider error text the way the message could.
+    this.name = 'BudgetExceededError';
   }
 }
 
@@ -1662,6 +1666,10 @@ describe('rails', () => {
     await vi.advanceTimersByTimeAsync(200_000);
     expect(seen.length).toBe(1);
     expect(seen[0].text).toContain('watchdog');
+    // watchdog escalations are answerable: the task pauses and an ANSWER resumes it
+    expect(mission.state().tasks[seen[0].taskId].state).toBe('input-required');
+    mission.answerEscalation(seen[0].taskId, 'keep going');
+    expect(mission.state().tasks[seen[0].taskId].state).toBe('working');
     mission.cancel('cleanup');
     await p;
     vi.useRealTimers();
@@ -1716,7 +1724,7 @@ beforeModelCall: () => this.budget.assertUnderCap(),
 3. In `handleModelFailure`, detect the budget case before the generic path:
 ```ts
 private handleModelFailure(nodeId: string, error: string): void {
-  if (error.includes('budget exceeded')) {
+  if (error.includes('BudgetExceededError')) {
     this.finish({ status: 'failed', reason: 'budget-exceeded', totalCostUsd: this.budget.totalUsd }, 'mission.failed', { reason: 'budget-exceeded' });
     return;
   }
@@ -1739,17 +1747,23 @@ this.timers.watchdog.unref?.();
 5. Add:
 ```ts
 private checkWatchdog(): void {
+  if (this.done) return;
   const s = this.state();
   const now = Date.now();
   for (const n of Object.values(s.nodes)) {
+    if (this.done) return; // a callback may have cancelled mid-loop
     if (this.watchdogFired.has(n.id)) continue;
     if (s.tasks[n.taskId]?.state !== 'working') continue;
     if (now - new Date(n.lastTs).getTime() < this.config.watchdogMs) continue;
     this.watchdogFired.add(n.id);
     this.log.append('watchdog', { nodeId: n.id });
     const text = `watchdog: ${n.id} silent for over ${Math.round(this.config.watchdogMs / 60_000)} min`;
-    this.escalationCb?.({ taskId: n.taskId, from: n.id, text });
     this.log.append('message', { kind: 'ESCALATE', from: n.id, to: 'operator', taskId: n.taskId, text });
+    // WHY input-required: the operator's designed reply is answerEscalation(taskId, …);
+    // without this transition the ANSWER guard would silently drop that reply.
+    this.log.append('task.state', { taskId: n.taskId, state: 'input-required' });
+    try { this.escalationCb?.({ taskId: n.taskId, from: n.id, text }); }
+    catch { /* operator callback errors must not poison kernel routing */ }
   }
 }
 ```
