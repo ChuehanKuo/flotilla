@@ -54,10 +54,17 @@ export class CodexDriver implements TurnDriver {
       maxBuffer: 10 * 2 ** 20,
     });
 
-    // WHY no try/catch here: an unparseable/empty stream must throw so the node's
-    // retry-then-escalate machinery handles it — never swallow it into a
-    // silently-empty turn. parseStdout itself throws for that case.
-    const { text: resultText, sessionId } = this.parseStdout(stdout);
+    // WHY captured before parseStdout: parseStdout doesn't know whether this is
+    // the turn establishing a fresh session — that context lives here, in
+    // whether this.sessionId was already set walking in.
+    const isFirstTurn = this.sessionId === undefined;
+
+    // WHY no try/catch here: an unparseable/empty stream, an empty final text,
+    // or (on the first turn) a missing session id must all throw so the node's
+    // retry-then-escalate machinery handles it — never swallow any of them into
+    // a silently-empty or silently-amnesiac turn. parseStdout itself throws for
+    // these cases.
+    const { text: resultText, sessionId } = this.parseStdout(stdout, isFirstTurn);
 
     // The turn succeeded — only now drain the queue. A thrown execFile/parseStdout
     // above leaves it intact, so the node's retry of the same newText rebuilds
@@ -100,7 +107,7 @@ export class CodexDriver implements TurnDriver {
   // event object per line — a single JSON.parse(stdout) (the ClaudeCodeDriver
   // approach) would fail on the very first reply. Unparseable individual lines
   // are skipped rather than failing the whole turn (log noise, partial writes).
-  private parseStdout(stdout: string): { text: string; sessionId?: string } {
+  private parseStdout(stdout: string, isFirstTurn: boolean): { text: string; sessionId?: string } {
     const events: CodexEvent[] = [];
     for (const line of stdout.split('\n')) {
       const trimmed = line.trim();
@@ -123,15 +130,34 @@ export class CodexDriver implements TurnDriver {
       if (id) { sessionId = id; break; }
     }
 
+    // WHY events.length > 0 gates this: zero parseable events falls straight to
+    // the raw-stdout fallback below (a distinct, pre-existing degenerate case —
+    // e.g. a CLI printing plain text, not JSONL at all). This guard targets a
+    // stream that DID parse as valid JSONL but never carried a session/thread id
+    // on the turn establishing a fresh session — the likeliest real-CLI
+    // shape-mismatch symptom. Silent fresh-session-per-turn amnesia is worse
+    // than a loud failure the retry-then-escalate machinery can react to.
+    if (events.length > 0 && isFirstTurn && !sessionId) {
+      throw new Error('codex output carried no session/thread id');
+    }
+
     const agentMessageParts = events
       .filter(e => typeof e.type === 'string' && e.type.includes('agent_message') && typeof e.text === 'string')
       .map(e => e.text as string);
 
-    if (agentMessageParts.length > 0) return { text: agentMessageParts.join(''), sessionId };
+    let text: string;
+    if (agentMessageParts.length > 0) {
+      text = agentMessageParts.join('');
+    } else {
+      const last = events[events.length - 1];
+      text = last && typeof last.text === 'string' ? last.text : stdout.trim();
+    }
 
-    const last = events[events.length - 1];
-    if (last && typeof last.text === 'string') return { text: last.text, sessionId };
+    // WHY throw instead of returning '': an empty "success" would silently
+    // drain the pending-command-results queue and complete a node turn with
+    // nothing — fail loudly so retry-then-escalate surfaces it instead.
+    if (text === '') throw new Error('empty turn text from codex output');
 
-    return { text: stdout.trim(), sessionId };
+    return { text, sessionId };
   }
 }

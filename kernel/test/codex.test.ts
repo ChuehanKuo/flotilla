@@ -192,7 +192,7 @@ describe('CodexDriver', () => {
   });
 
   it('skips unparseable JSONL lines while still extracting session id and text from valid ones', async () => {
-    const { workspaceDir, replyFile } = setup();
+    const { workspaceDir, logFile, replyFile } = setup();
     const lines = [
       'not json at all',
       JSON.stringify({ type: 'session_started', session_id: 'sess-garbage-ok' }),
@@ -205,6 +205,37 @@ describe('CodexDriver', () => {
     const out = await driver.turn(turnInput(fakeTools(), 'go'));
 
     expect(out.text).toBe('survived the garbage');
+
+    // WHY a resume-turn assertion: extracting a session id from a line surrounded
+    // by garbage is only proven correct if that id is actually the one used to
+    // resume — asserting on `out` alone wouldn't catch a wrong-but-truthy id
+    // (e.g. from a garbage line that happened to parse) slipping through unnoticed.
+    setReplyEvents(replyFile, [{ type: 'agent_message', text: 'resumed ok' }]);
+    await driver.turn(turnInput(fakeTools(), 'turn two'));
+    const [, args2] = readLog(logFile);
+    expect(args2).toEqual(['exec', 'resume', 'sess-garbage-ok', 'turn two', '--json']);
+  });
+
+  it('throws when every agent_message event carries empty text, instead of returning an empty success', async () => {
+    const { workspaceDir, replyFile } = setup();
+    setReplyEvents(replyFile, [
+      { type: 'session_started', session_id: 'sess-1' },
+      { type: 'agent_message', text: '' },
+      { type: 'agent_message', text: '' },
+    ]);
+    const driver = new CodexDriver({ workspaceDir, bin: FIXTURE });
+
+    await expect(driver.turn(turnInput(fakeTools(), 'go'))).rejects.toThrow('empty turn text from codex output');
+  });
+
+  it('throws when a clean first-turn JSONL stream carries no session/thread id', async () => {
+    const { workspaceDir, replyFile } = setup();
+    // "clean" = valid, parseable JSONL — distinct from the raw-stdout-fallback
+    // case above (zero parseable events), which is a different degenerate mode.
+    setReplyEvents(replyFile, [{ type: 'agent_message', text: 'ok, but no session id anywhere' }]);
+    const driver = new CodexDriver({ workspaceDir, bin: FIXTURE });
+
+    await expect(driver.turn(turnInput(fakeTools(), 'go'))).rejects.toThrow('codex output carried no session/thread id');
   });
 
   it('concatenates every event whose type contains agent_message, in order', async () => {
