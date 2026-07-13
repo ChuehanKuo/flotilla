@@ -13,7 +13,11 @@ export class BudgetTracker {
   constructor(private pricing: MissionConfig['pricing'], private missionCapUsd: number) {}
 
   addUsage(nodeId: string, model: string, usage: { inputTokens: number; outputTokens: number }): number {
-    const p = this.pricing[model];
+    // WHY the fallback: an unrecognized model id must never silently count $0
+    // toward the hard cap — price it at the most expensive configured rate instead.
+    const rates = Object.values(this.pricing);
+    const p = this.pricing[model]
+      ?? (rates.length ? rates.reduce((a, b) => (a.inputPerMTok + a.outputPerMTok >= b.inputPerMTok + b.outputPerMTok ? a : b)) : undefined);
     const cost = p ? (usage.inputTokens / 1e6) * p.inputPerMTok + (usage.outputTokens / 1e6) * p.outputPerMTok : 0;
     this.total += cost;
     this.perNode.set(nodeId, (this.perNode.get(nodeId) ?? 0) + cost);

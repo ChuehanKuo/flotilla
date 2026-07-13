@@ -12,9 +12,16 @@ describe('BudgetTracker', () => {
     expect(b.nodeUsd('n1')).toBeCloseTo(4.5);
   });
 
-  it('unknown model costs 0 but does not throw', () => {
+  it('unknown model is priced at the most expensive configured rate (never under-counts)', () => {
     const b = new BudgetTracker(pricing, 5);
-    expect(b.addUsage('n1', 'mystery', { inputTokens: 1000, outputTokens: 1000 })).toBe(0);
+    const cost = b.addUsage('n1', 'mystery', { inputTokens: 1_000_000, outputTokens: 100_000 });
+    expect(cost).toBeCloseTo(4.5); // priced as m1 — the only, hence max, configured rate
+  });
+
+  it('assertUnderCap throws at exact cap equality', () => {
+    const b = new BudgetTracker({ m1: { inputPerMTok: 1, outputPerMTok: 1 } }, 1);
+    b.addUsage('n1', 'm1', { inputTokens: 1_000_000, outputTokens: 0 }); // exactly $1.00
+    expect(() => b.assertUnderCap()).toThrow(BudgetExceededError);
   });
 
   it('assertUnderCap throws once the cap is reached', () => {
