@@ -1,9 +1,9 @@
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
-import type { FleetMessage, Provider } from '../types.js';
+import type { DriverKind, FleetMessage, Provider } from '../types.js';
 
 export interface KernelApi {
-  delegate(fromNodeId: string, args: { role: string; charter: string; task: string; provider?: Provider; model?: string }): string;
+  delegate(fromNodeId: string, args: { role: string; charter: string; task: string; driver?: DriverKind; provider?: Provider; model?: string }): string;
   emitMessage(msg: Omit<FleetMessage, 'auto'>): void;
 }
 
@@ -35,7 +35,8 @@ export function makeCoordinationTools(ctx: ToolCtx, api: KernelApi): ToolSet {
           role: z.string().describe('short role name, e.g. metrics-scan'),
           charter: z.string().describe('the crew agent\'s role instructions'),
           task: z.string().describe('the concrete task order'),
-          provider: z.enum(['anthropic', 'openai']).optional(),
+          driver: z.enum(['api', 'claude-code', 'codex']).optional().describe('runtime for this crew agent; omit for mission default'),
+          provider: z.enum(['anthropic', 'openai']).optional().describe('api driver only'),
           model: z.string().optional(),
         }),
         execute: async (args) => api.delegate(ctx.nodeId, args),

@@ -1,6 +1,7 @@
-import { generateText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import type { ModelMessage, ToolSet } from 'ai';
 import type { EventLog } from './log.js';
 import type { FleetMessage } from './types.js';
+import type { TurnDriver, TurnOutput } from './driver.js';
 
 export interface NodeSpec {
   id: string; parentId: string; role: string; charter: string;
@@ -8,12 +9,12 @@ export interface NodeSpec {
 }
 
 export interface NodeDeps {
-  model: LanguageModel;
+  driver: TurnDriver;
   tools: ToolSet;
   log: EventLog;
   maxStepsPerTurn: number;
   beforeModelCall(): void;
-  onUsage(nodeId: string, usage: { inputTokens: number; outputTokens: number }): void;
+  onUsage(nodeId: string, usage: { inputTokens: number; outputTokens: number }, billing: 'api' | 'subscription'): void;
   onTurnEnd(nodeId: string, finalText: string): void;
   onModelFailure(nodeId: string, error: string): void;
   abortSignal: AbortSignal;
@@ -48,13 +49,10 @@ export class AgentNode {
         const batch = this.pending.splice(0);
         const text = batch.map(m => `[${m.kind} from ${m.from} · task ${m.taskId}] ${m.text}`).join('\n\n');
         this.transcript.push({ role: 'user', content: text });
-        const result = await this.callModelWithRetry();
+        const result = await this.callDriverWithRetry(text);
         if (!result) return; // failure already reported
-        this.transcript.push(...result.response.messages);
-        this.deps.onUsage(this.spec.id, {
-          inputTokens: result.usage.inputTokens ?? 0,
-          outputTokens: result.usage.outputTokens ?? 0,
-        });
+        this.transcript.push(...result.responseMessages);
+        this.deps.onUsage(this.spec.id, result.usage, result.billing);
         this.deps.onTurnEnd(this.spec.id, result.text);
       }
     } finally {
@@ -62,16 +60,16 @@ export class AgentNode {
     }
   }
 
-  private async callModelWithRetry() {
+  private async callDriverWithRetry(newText: string): Promise<TurnOutput | null> {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         this.deps.beforeModelCall();
-        return await generateText({
-          model: this.deps.model,
+        return await this.deps.driver.turn({
           system: this.spec.charter,
-          messages: this.transcript,
+          newText,
+          transcript: this.transcript,
           tools: this.deps.tools,
-          stopWhen: stepCountIs(this.deps.maxStepsPerTurn),
+          maxSteps: this.deps.maxStepsPerTurn,
           abortSignal: this.deps.abortSignal,
         });
       } catch (err) {

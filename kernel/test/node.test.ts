@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventLog } from '../src/log.js';
 import { AgentNode } from '../src/node.js';
+import { AiSdkDriver } from '../src/driver.js';
 import { makeCoordinationTools } from '../src/tools/coordination.js';
 import { scriptedModel, failingThenTextModel } from './helpers.js';
 
 function deps(model: any, tools: any, log = new EventLog('m-t')) {
   return {
-    model, tools, log,
+    driver: new AiSdkDriver(model), tools, log,
     maxStepsPerTurn: 12,
     beforeModelCall: vi.fn(),
     onUsage: vi.fn(),

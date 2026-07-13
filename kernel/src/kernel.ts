@@ -7,10 +7,10 @@ import { BudgetTracker, BudgetExceededError } from './budget.js';
 import { AgentNode } from './node.js';
 import { makeFileTools } from './tools/files.js';
 import { makeCoordinationTools, type KernelApi } from './tools/coordination.js';
-import type { ModelFactory } from './providers.js';
-import type { FleetMessage, MissionConfig, Provider, TaskState } from './types.js';
+import type { DriverFactory } from './providers.js';
+import type { DriverKind, FleetMessage, MissionConfig, NodeRef, Provider, TaskState } from './types.js';
 
-export interface MissionDeps { modelFactory: ModelFactory; missionsDir?: string }
+export interface MissionDeps { driverFactory: DriverFactory; missionsDir?: string }
 export interface MissionResult { status: 'completed' | 'canceled' | 'failed'; result?: string; reason?: string; totalCostUsd: number }
 
 const CAPTAIN_CHARTER = `You are the mission captain of an agent fleet. The operator's order follows as your task.
@@ -87,7 +87,7 @@ export class Mission {
 
   private taskStateOf(taskId: string): TaskState { return this.state().tasks[taskId]?.state; }
 
-  private spawn(parentId: string, depth: number, captain: boolean, role: string, charter: string, ref: { provider: Provider; model: string }): string {
+  private spawn(parentId: string, depth: number, captain: boolean, role: string, charter: string, ref: NodeRef): string {
     this.counter++;
     const nodeId = captain ? 'captain' : `${role.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${this.counter}`;
     const taskId = `t${this.counter}`;
@@ -106,14 +106,15 @@ export class Mission {
     const node = new AgentNode(
       { id: nodeId, parentId, role, charter: captain ? charter : charter + CREW_SUFFIX, taskId, depth, captain },
       {
-        model: this.deps.modelFactory(ref),
+        driver: this.deps.driverFactory(ref, { workspaceDir: this.workspaceDir }),
         tools,
         log: this.log,
         maxStepsPerTurn: this.config.maxStepsPerTurn,
         beforeModelCall: () => this.budget.assertUnderCap(),
-        onUsage: (id, usage) => {
-          const costUsd = this.budget.addUsage(id, ref.model, usage);
-          this.log.append('usage', { nodeId: id, ...usage, costUsd });
+        onUsage: (id, usage, billing) => {
+          const modelId = ref.model ?? (ref.provider ? this.config.models.apiDefaults[ref.provider] : 'unknown');
+          const costUsd = billing === 'api' ? this.budget.addUsage(id, modelId, usage) : 0;
+          this.log.append('usage', { nodeId: id, ...usage, costUsd, billing });
         },
         onTurnEnd: (id, finalText) => this.handleTurnEnd(id, finalText),
         onModelFailure: (id, error) => this.handleModelFailure(id, error),
@@ -124,13 +125,13 @@ export class Mission {
     return nodeId;
   }
 
-  private delegate(fromNodeId: string, args: { role: string; charter: string; task: string; provider?: Provider; model?: string }): string {
+  private delegate(fromNodeId: string, args: { role: string; charter: string; task: string; driver?: DriverKind; provider?: Provider; model?: string }): string {
     const outcome = this.tryDelegate(fromNodeId, args);
     this.log.append('tool.called', { nodeId: fromNodeId, tool: 'delegate', role: args.role, outcome });
     return outcome;
   }
 
-  private tryDelegate(fromNodeId: string, args: { role: string; charter: string; task: string; provider?: Provider; model?: string }): string {
+  private tryDelegate(fromNodeId: string, args: { role: string; charter: string; task: string; driver?: DriverKind; provider?: Provider; model?: string }): string {
     const parent = this.nodes.get(fromNodeId)!;
     const childDepth = parent.spec.depth + 1;
     if (childDepth > this.config.maxDepth) return 'refused: depth cap reached';
@@ -140,7 +141,13 @@ export class Mission {
     if (live.length >= this.config.maxConcurrentNodes) return 'refused: max concurrent nodes reached';
 
     const fallback = this.config.models.crew[children.length % this.config.models.crew.length];
-    const ref = { provider: args.provider ?? fallback.provider, model: args.model ?? (args.provider ? this.config.models.crew.find(c => c.provider === args.provider)?.model ?? fallback.model : fallback.model) };
+    const ref: NodeRef = (args.driver || args.provider)
+      ? {
+          driver: args.driver ?? 'api',
+          provider: args.provider,
+          model: args.model ?? (args.provider ? this.config.models.apiDefaults[args.provider] : undefined),
+        }
+      : fallback;
     const childId = this.spawn(fromNodeId, childDepth, false, args.role, args.charter, ref);
     const childTaskId = this.nodes.get(childId)!.spec.taskId;
     this.route({ kind: 'ORDER', from: fromNodeId, to: childId, taskId: childTaskId, text: args.task });

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Mission } from '../src/kernel.js';
 import { defaultConfig } from '../src/types.js';
+import { AiSdkDriver } from '../src/driver.js';
 import { scriptedModel } from './helpers.js';
 
 describe('rails', () => {
@@ -14,7 +15,7 @@ describe('rails', () => {
     ]);
     let first = true;
     const mission = new Mission('x', cfg, {
-      modelFactory: () => (first ? ((first = false), captain) : scriptedModel([{ toolName: 'deliver', input: { text: 'r' } }, { text: '' }])),
+      driverFactory: () => new AiSdkDriver(first ? ((first = false), captain) : scriptedModel([{ toolName: 'deliver', input: { text: 'r' } }, { text: '' }])),
     });
     const res = await mission.start();
     expect(res.status).toBe('failed');
@@ -27,7 +28,7 @@ describe('rails', () => {
     const hanging = new MockLanguageModelV2({
       doGenerate: () => new Promise(() => {}),
     });
-    const mission = new Mission('x', defaultConfig(), { modelFactory: () => hanging as any });
+    const mission = new Mission('x', defaultConfig(), { driverFactory: () => new AiSdkDriver(hanging as any) });
     const p = mission.start();
     setTimeout(() => mission.cancel('operator kill'), 30);
     const res = await p;
@@ -41,7 +42,7 @@ describe('rails', () => {
     const { MockLanguageModelV2 } = await import('ai/test');
     const hanging = new MockLanguageModelV2({ doGenerate: () => new Promise(() => {}) });
     const cfg = { ...defaultConfig(), missionTimeoutMs: 60_000 };
-    const mission = new Mission('x', cfg, { modelFactory: () => hanging as any });
+    const mission = new Mission('x', cfg, { driverFactory: () => new AiSdkDriver(hanging as any) });
     const p = mission.start();
     await vi.advanceTimersByTimeAsync(61_000);
     const res = await p;
@@ -55,7 +56,7 @@ describe('rails', () => {
     const { MockLanguageModelV2 } = await import('ai/test');
     const hanging = new MockLanguageModelV2({ doGenerate: () => new Promise(() => {}) });
     const cfg = { ...defaultConfig(), watchdogMs: 120_000, missionTimeoutMs: 10_000_000 };
-    const mission = new Mission('x', cfg, { modelFactory: () => hanging as any });
+    const mission = new Mission('x', cfg, { driverFactory: () => new AiSdkDriver(hanging as any) });
     const seen: any[] = [];
     mission.onOperatorEscalation(e => seen.push(e));
     const p = mission.start();
@@ -77,7 +78,7 @@ describe('rails', () => {
       { toolName: 'delegate', input: { role: 'a', charter: 'c', task: 't' } },
       { text: 'FINAL: no crew' },
     ]);
-    const mission = new Mission('x', cfg, { modelFactory: () => captain });
+    const mission = new Mission('x', cfg, { driverFactory: () => new AiSdkDriver(captain) });
     const res = await mission.start();
     expect(res.status).toBe('completed');
     const audit = mission.log.events.filter(e => e.type === 'tool.called');
@@ -91,7 +92,7 @@ describe('rails', () => {
       { text: 'awaiting' },
       { text: 'FINAL: scoped' },
     ]);
-    const mission = new Mission('x', defaultConfig(), { modelFactory: () => captain });
+    const mission = new Mission('x', defaultConfig(), { driverFactory: () => new AiSdkDriver(captain) });
     mission.onOperatorEscalation(e => {
       mission.answerEscalation('t-phantom', 'lost');   // guard must drop this
       setTimeout(() => mission.answerEscalation(e.taskId, 'real answer'), 10);

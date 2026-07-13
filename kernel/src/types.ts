@@ -1,4 +1,5 @@
 export type Provider = 'anthropic' | 'openai';
+export type DriverKind = 'api' | 'claude-code' | 'codex';
 
 export type TaskState =
   | 'submitted' | 'working' | 'input-required'
@@ -31,6 +32,7 @@ export interface FleetEvent {
 }
 
 export interface ModelRef { provider: Provider; model: string }
+export interface NodeRef { driver: DriverKind; provider?: Provider; model?: string }
 
 export interface MissionConfig {
   budgetUsd: number;
@@ -40,7 +42,8 @@ export interface MissionConfig {
   watchdogMs: number;
   missionTimeoutMs: number;
   maxStepsPerTurn: number;
-  models: { captain: ModelRef; crew: ModelRef[] };
+  maxTurnsPerNode: number;
+  models: { captain: NodeRef; crew: NodeRef[]; apiDefaults: Record<Provider, string> };
   pricing: Record<string, { inputPerMTok: number; outputPerMTok: number }>;
 }
 
@@ -53,15 +56,17 @@ export function defaultConfig(): MissionConfig {
     maxDepth: 2,
     maxChildren: 5,
     maxConcurrentNodes: 8,
-    watchdogMs: 300_000,
+    watchdogMs: 600_000,
     missionTimeoutMs: 1_800_000,
     maxStepsPerTurn: 12,
+    maxTurnsPerNode: 20,
     models: {
-      captain: { provider: 'anthropic', model: 'claude-sonnet-5' },
+      captain: { driver: 'claude-code' },
       crew: [
-        { provider: 'anthropic', model: 'claude-sonnet-5' },
-        { provider: 'openai', model: 'gpt-5.6-sol' },
+        { driver: 'claude-code' },
+        { driver: 'codex' },
       ],
+      apiDefaults: { anthropic: 'claude-sonnet-5', openai: 'gpt-5.6-sol' },
     },
     pricing: {
       'claude-sonnet-5': { inputPerMTok: 3, outputPerMTok: 15 },

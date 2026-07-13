@@ -1,6 +1,6 @@
 import { createInterface } from 'node:readline/promises';
 import pc from 'picocolors';
-import { Mission, defaultConfig, realModelFactory } from '@flotilla/kernel';
+import { Mission, defaultConfig, realModelFactory, AiSdkDriver, type DriverFactory } from '@flotilla/kernel';
 import { formatEvent } from './render.js';
 
 export async function runMission(order: string, opts: { budget?: string; missionsDir?: string }): Promise<number> {
@@ -16,14 +16,26 @@ export async function runMission(order: string, opts: { budget?: string; mission
     config.budgetUsd = cap;
   }
 
-  const providersUsed = new Set([config.models.captain.provider, ...config.models.crew.map(c => c.provider)]);
+  // WHY only 'api' refs: subscription-first defaults ship with claude-code/codex
+  // crew that never touch an API key; gating on the full crew list would demand
+  // ANTHROPIC_API_KEY/OPENAI_API_KEY for missions that never call those SDKs.
+  const apiRefs = [config.models.captain, ...config.models.crew].filter(ref => ref.driver === 'api');
+  const providersUsed = new Set(apiRefs.map(ref => ref.provider ?? 'anthropic'));
   for (const p of providersUsed) {
     const key = p === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
     if (!process.env[key]) { console.error(pc.red(`missing ${key} in environment`)); return 1; }
   }
 
+  // WHY temporary: claude-code/codex drivers land in P3/P4 — until then any
+  // non-api ref must fail loudly rather than silently falling through to the
+  // AI SDK with the wrong runtime.
+  const driverFactory: DriverFactory = (ref) => {
+    if (ref.driver !== 'api') throw new Error(`driver not implemented yet: ${ref.driver} (P3/P4)`);
+    return new AiSdkDriver(realModelFactory({ provider: ref.provider ?? 'anthropic', model: ref.model ?? config.models.apiDefaults[ref.provider ?? 'anthropic'] }));
+  };
+
   const missionsDir = opts.missionsDir ?? './missions';
-  const mission = new Mission(order, config, { modelFactory: realModelFactory, missionsDir });
+  const mission = new Mission(order, config, { driverFactory, missionsDir });
   mission.log.subscribe(e => { const line = formatEvent(e); if (line) console.log(line); });
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
