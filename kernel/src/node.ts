@@ -32,7 +32,13 @@ export class AgentNode {
 
   enqueue(msg: FleetMessage): void {
     this.pending.push(msg);
-    if (!this.running) void this.runLoop();
+    // WHY the catch fence: kernel hooks run inside this floating promise; a
+    // throwing hook must surface as a node failure, not an unhandledRejection.
+    if (!this.running) {
+      void this.runLoop().catch(err => {
+        try { this.deps.onModelFailure(this.spec.id, `node loop crashed: ${String(err)}`); } catch { /* never rethrow into the void */ }
+      });
+    }
   }
 
   private async runLoop(): Promise<void> {

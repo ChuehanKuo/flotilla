@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventLog } from './log.js';
 import { reduce, type FleetState } from './reducer.js';
-import { BudgetTracker } from './budget.js';
+import { BudgetTracker, BudgetExceededError } from './budget.js';
 import { AgentNode } from './node.js';
 import { makeFileTools } from './tools/files.js';
 import { makeCoordinationTools, type KernelApi } from './tools/coordination.js';
@@ -37,6 +37,8 @@ export class Mission {
   private escalationCb?: (e: { taskId: string; from: string; text: string }) => void;
   private resolveResult!: (r: MissionResult) => void;
   private done = false;
+  private timers: { watchdog?: NodeJS.Timeout; timeout?: NodeJS.Timeout } = {};
+  private watchdogFired = new Set<string>();
 
   constructor(private order: string, private config: MissionConfig, private deps: MissionDeps) {
     this.id = `m-${Date.now().toString(36)}`;
@@ -66,13 +68,18 @@ export class Mission {
     this.log.append('mission.started', { order: this.order, config: { budgetUsd: this.config.budgetUsd, maxDepth: this.config.maxDepth } });
     const captainId = this.spawn('operator', 1, true, 'captain', CAPTAIN_CHARTER, this.config.models.captain);
     this.route({ kind: 'ORDER', from: 'operator', to: captainId, taskId: this.nodes.get(captainId)!.spec.taskId, text: this.order });
-    // Task 10 adds: watchdog interval + mission wall-clock timeout here.
+    this.timers.timeout = setTimeout(() => this.cancel('mission timeout'), this.config.missionTimeoutMs);
+    this.timers.timeout.unref?.();
+    this.timers.watchdog = setInterval(() => this.checkWatchdog(), 30_000);
+    this.timers.watchdog.unref?.();
     return promise;
   }
 
   private finish(result: MissionResult, eventType: 'mission.completed' | 'mission.canceled' | 'mission.failed', data: Record<string, unknown>): void {
     if (this.done) return;
     this.done = true;
+    if (this.timers.watchdog) clearInterval(this.timers.watchdog);
+    if (this.timers.timeout) clearTimeout(this.timers.timeout);
     this.abort.abort();
     this.log.append(eventType, data);
     this.resolveResult(result);
@@ -103,7 +110,7 @@ export class Mission {
         tools,
         log: this.log,
         maxStepsPerTurn: this.config.maxStepsPerTurn,
-        beforeModelCall: () => {}, // Task 10: budget gate
+        beforeModelCall: () => this.budget.assertUnderCap(),
         onUsage: (id, usage) => {
           const costUsd = this.budget.addUsage(id, ref.model, usage);
           this.log.append('usage', { nodeId: id, ...usage, costUsd });
@@ -118,6 +125,12 @@ export class Mission {
   }
 
   private delegate(fromNodeId: string, args: { role: string; charter: string; task: string; provider?: Provider; model?: string }): string {
+    const outcome = this.tryDelegate(fromNodeId, args);
+    this.log.append('tool.called', { nodeId: fromNodeId, tool: 'delegate', role: args.role, outcome });
+    return outcome;
+  }
+
+  private tryDelegate(fromNodeId: string, args: { role: string; charter: string; task: string; provider?: Provider; model?: string }): string {
     const parent = this.nodes.get(fromNodeId)!;
     const childDepth = parent.spec.depth + 1;
     if (childDepth > this.config.maxDepth) return 'refused: depth cap reached';
@@ -146,10 +159,17 @@ export class Mission {
         break;
       case 'ESCALATE':
         this.log.append('task.state', { taskId: resolved.taskId, state: 'input-required' });
-        if (resolved.to === 'operator') this.escalationCb?.({ taskId: resolved.taskId, from: resolved.from, text: resolved.text });
+        if (resolved.to === 'operator') {
+          try { this.escalationCb?.({ taskId: resolved.taskId, from: resolved.from, text: resolved.text }); }
+          catch { /* operator callback errors must not poison kernel routing */ }
+        }
         else this.nodes.get(resolved.to)?.enqueue(resolved);
         break;
       case 'ANSWER':
+        // Only an input-required task can be answered; stale answers to closed
+        // tasks and answers to unknown taskIds stay logged (message event above)
+        // but are not acted on — this also keeps phantom tasks out of the state.
+        if (this.taskStateOf(resolved.taskId) !== 'input-required') break;
         this.log.append('task.state', { taskId: resolved.taskId, state: 'working' });
         this.nodes.get(resolved.to)?.enqueue(resolved);
         break;
@@ -184,7 +204,27 @@ export class Mission {
     this.route({ kind: 'DELIVER', from: nodeId, to: node.spec.parentId, taskId: node.spec.taskId, text: finalText, auto: true });
   }
 
+  private checkWatchdog(): void {
+    const s = this.state();
+    const now = Date.now();
+    for (const n of Object.values(s.nodes)) {
+      if (this.watchdogFired.has(n.id)) continue;
+      if (s.tasks[n.taskId]?.state !== 'working') continue;
+      if (now - new Date(n.lastTs).getTime() < this.config.watchdogMs) continue;
+      this.watchdogFired.add(n.id);
+      this.log.append('watchdog', { nodeId: n.id });
+      const text = `watchdog: ${n.id} silent for over ${Math.round(this.config.watchdogMs / 60_000)} min`;
+      try { this.escalationCb?.({ taskId: n.taskId, from: n.id, text }); }
+      catch { /* operator callback errors must not poison kernel routing */ }
+      this.log.append('message', { kind: 'ESCALATE', from: n.id, to: 'operator', taskId: n.taskId, text });
+    }
+  }
+
   private handleModelFailure(nodeId: string, error: string): void {
+    if (error.includes('budget exceeded')) {
+      this.finish({ status: 'failed', reason: 'budget-exceeded', totalCostUsd: this.budget.totalUsd }, 'mission.failed', { reason: 'budget-exceeded' });
+      return;
+    }
     const node = this.nodes.get(nodeId)!;
     this.log.append('task.state', { taskId: node.spec.taskId, state: 'failed' });
     this.route({ kind: 'ESCALATE', from: nodeId, to: node.spec.parentId, taskId: node.spec.taskId, text: `node failed after retry: ${error}` });
