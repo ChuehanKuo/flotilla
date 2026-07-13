@@ -1169,6 +1169,7 @@ export class AgentNode {
   constructor(readonly spec: NodeSpec, private deps: NodeDeps) {}
 
   get busy(): boolean { return this.running; }
+  get hasPending(): boolean { return this.pending.length > 0; }
 
   enqueue(msg: FleetMessage): void {
     this.pending.push(msg);
@@ -1239,6 +1240,7 @@ git commit -m "feat(kernel): AgentNode inbox loop with retry-then-fail semantics
 
 **Files:**
 - Create: `kernel/src/kernel.ts`, `kernel/src/index.ts`
+- Modify: `kernel/src/node.ts` (additive: `hasPending` getter, needed by the auto-deliver pending guard)
 - Test: `kernel/test/kernel.test.ts`
 
 **Interfaces:**
@@ -1261,7 +1263,7 @@ git commit -m "feat(kernel): AgentNode inbox loop with retry-then-fail semantics
   Routing rules (single source of truth, `route(msg)`):
   - every message → `message` event; then per kind: `ORDER` → assignee task `working`; `ESCALATE` → task `input-required`, forward to `to` (if `to === 'operator'`, fire operator callback); `ANSWER` → task `working`, deliver to task assignee; `REPORT` → forward only; `DELIVER` → task `completed`, forward; `DELIVER` addressed to `'operator'` on the root task → `mission.completed`, resolve `start()`.
   - Crew escalations go to their captain (parentId), captain escalations go to `'operator'` — addressing was fixed in Task 7; the kernel only honors it.
-  - Auto-deliver fallback (`onTurnEnd`): if the node's task is still `working`, the node has no children with open (`submitted/working/input-required`) tasks, and final text is non-empty → emit `DELIVER` with `auto: true`. This is why the happy path terminates even when a model forgets to call `deliver`.
+  - Auto-deliver fallback (`onTurnEnd`): if the node's task is still `working`, the node has no children with open (`submitted/working/input-required`) tasks, the node's inbox is empty (`!node.hasPending` — queued messages mean another turn is coming; without this guard, zero-latency crew that complete inside the captain's own turn make the captain's incidental turn text auto-deliver as the mission result), and final text is non-empty → emit `DELIVER` with `auto: true`. This is why the happy path terminates even when a model forgets to call `deliver`, independent of crew timing.
   - `delegate` enforcement: refuse (return `'refused: …'` string, log nothing but the `tool.called`) when child depth would exceed `maxDepth`, node's children ≥ `maxChildren`, or live nodes ≥ `maxConcurrentNodes`. Otherwise: create nodeId `<role-slug>-<n>`, taskId `t<n>`, emit `node.spawned` + `task.state(submitted)`, route an `ORDER`.
   - Captain charter (exact system-prompt text, used by `start()`):
     ```
@@ -1536,6 +1538,11 @@ export class Mission {
     const node = this.nodes.get(nodeId)!;
     const taskState = this.taskStateOf(node.spec.taskId);
     if (taskState !== 'working' || !finalText.trim()) return;
+    // WHY the pending guard: queued messages (e.g. crew DELIVERs that raced in
+    // during this very turn) mean another turn is coming — this turn's text is
+    // narration, not the deliverable. Without it, fast crew make the captain's
+    // "awaiting crew" auto-deliver as the mission result.
+    if (node.hasPending) return;
     const openChild = [...this.nodes.values()].some(n =>
       n.spec.parentId === nodeId && ['submitted', 'working', 'input-required'].includes(this.taskStateOf(n.spec.taskId)));
     if (openChild) return;
