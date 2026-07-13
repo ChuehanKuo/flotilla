@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventLog } from '../src/log.js';
@@ -35,5 +35,16 @@ describe('EventLog', () => {
     expect(loaded).toHaveLength(2);
     expect(loaded[0].data).toEqual({ order: 'scan' });
     expect(loaded[1].seq).toBe(2);
+  });
+
+  it('load skips unparseable lines instead of throwing', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'flotilla-')), 'events.jsonl');
+    const log = new EventLog('m-test', file);
+    log.append('mission.started', { order: 'scan' });
+    log.append('mission.completed', { result: 'ok' });
+    appendFileSync(file, '{"eventId":"trunc'); // simulated truncated final write
+    const loaded = EventLog.load(file);
+    expect(loaded).toHaveLength(2);
+    expect(loaded[1].type).toBe('mission.completed');
   });
 });

@@ -33,6 +33,11 @@ export class EventLog {
     return readFileSync(filePath, 'utf8')
       .split('\n')
       .filter(Boolean)
-      .map(line => JSON.parse(line) as FleetEvent);
+      .flatMap(line => {
+        // WHY the guard: a truncated or hand-edited last line must not make a
+        // mission's entire history unreadable — skip what can't be parsed.
+        try { return [JSON.parse(line) as FleetEvent]; }
+        catch { return []; }
+      });
   }
 }
