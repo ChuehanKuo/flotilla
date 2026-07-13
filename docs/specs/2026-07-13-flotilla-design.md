@@ -9,7 +9,9 @@
 
 An event-sourced coordination kernel where AI captains decompose the operator's orders and delegate to crew agents on any model provider, every message flows through one append-only log, and a persistent macOS app renders the fleet live — letting the operator watch, and message, any node mid-mission.
 
-Mental model: a fleet. **Arthur (admiral)** issues orders → **AI captains** (coordinator nodes) decompose and delegate → **crew** (worker nodes, possibly nested) execute. Any node can run on any provider (Anthropic, OpenAI, Google, local). Substrate-first: the same hierarchy does real work or gets studied — both are readers of the same log.
+Mental model: a fleet. **The operator (admiral)** issues orders → **AI captains** (coordinator nodes) decompose and delegate → **crew** (worker nodes, possibly nested) execute. Any node can run on any provider (Anthropic, OpenAI, Google, local). Substrate-first: the same hierarchy does real work or gets studied — both are readers of the same log.
+
+**Audience:** general-purpose, open-source — anyone running multi-agent work, not Arthur's setup specifically. macOS is the v0.x reference platform (where it gets built and dogfooded); nothing in the architecture is OS- or terminal-specific.
 
 ## 2. Research basis (2026-07-13 fan-out, 3 web briefs + 1 vault brief)
 
@@ -21,10 +23,10 @@ Mental model: a fleet. **Arthur (admiral)** issues orders → **AI captains** (c
 ## 3. Architecture — four layers
 
 ```
- Arthur (admiral) ── orders / escalation answers
+ Operator (admiral) ── orders / escalation answers
    │
-   ├── iTerm2 CLI  (order entry + line-tail + inline replies)
-   └── Flotilla.app (persistent Tauri macOS app — the observatory)
+   ├── CLI, any terminal (order entry + line-tail + inline replies)
+   └── Flotilla.app (persistent Tauri desktop app — the observatory)
              │ WebSocket / localhost
    ┌─────────┴────────── KERNEL (Node/TS, per-mission) ─────────┐
    │  EVENT LOG  — append-only JSONL, source of truth           │
@@ -60,17 +62,17 @@ Task states use A2A names verbatim: `submitted / working / input-required / auth
 - **No component holds authoritative state**: fleet picture = deterministic fold (reducer) over the log. Live UI, replay, and post-mortem are the same reducer at different cursors.
 - Token deltas stream live over the socket but are **not** persisted event-by-event; only message-level events land in the log (bloat control; replay does not need token granularity).
 
-### 3.5 Observatory (Flotilla.app — persistent Tauri macOS app)
-Tauri 2 shell (macOS WKWebView, ~10MB) around the React Flow canvas. **Persistent**: stays open across missions; new missions auto-attach (app watches the missions dir / localhost socket). Explicitly not a browser tab; nothing reopens per mission.
+### 3.5 Observatory (Flotilla.app — persistent Tauri desktop app)
+Tauri 2 shell (system WebView, ~10MB; one codebase builds macOS/Windows/Linux) around the React Flow canvas. **Persistent**: stays open across missions; new missions auto-attach (app watches the missions dir / localhost socket). Explicitly not a browser tab; nothing reopens per mission.
 - Live org chart — nodes colored by provider, badged by state; messages animate along edges.
 - Node inspector — transcript, tool calls, tokens, cost per node.
 - Order console — inject a message into **any** running node (the confirmed market gap), not only the root captain.
-- Escalation inbox — queued `input-required` items with context; answering resumes the branch. Native macOS notifications.
+- Escalation inbox — queued `input-required` items with context; answering resumes the branch. Native OS notifications (Tauri, cross-platform).
 - Kill switch + live cost ticker, always visible.
 - Replay — v0.1: minimal event-stepper over a past mission's log (same reducer as live).
 
-### 3.6 CLI (iTerm2)
-`flotilla "<order>"` boots a per-mission kernel, prints a compact one-line-per-event tail, supports inline escalation replies. Fully usable without the app (SSH/quick missions). CLI and app both merely append/read the same log — entry point is architecturally irrelevant.
+### 3.6 CLI (any terminal)
+`flotilla "<order>"` boots a per-mission kernel, prints a compact one-line-per-event tail, supports inline escalation replies. Terminal-agnostic (iTerm2, Terminal.app, Windows Terminal, VS Code pane, SSH) and fully usable without the app. CLI and app both merely append/read the same log — entry point is architecturally irrelevant.
 
 ## 4. Safety rails (kernel-enforced — the OpenClaw post-mortem answers)
 
@@ -84,7 +86,7 @@ Tauri 2 shell (macOS WKWebView, ~10MB) around the React Flow canvas. **Persisten
 
 ## 5. v0.1 vertical slice
 
-**In:** kernel; Anthropic + OpenAI adapters; 1 captain + N crew (depth-2 config); 4 message kinds; JSONL log + reducer; CLI (order entry, line-tail, inline replies); Flotilla.app (live chart, inspector, order console, escalation inbox, kill switch, cost ticker, minimal replay stepper); crew tools = sandboxed file I/O inside `missions/<id>/workspace/` only. Demo mission: captain decomposes a literature scan across 3 crew on two providers and assembles a brief.
+**In:** kernel; Anthropic + OpenAI adapters; 1 captain + N crew (depth-2 config); 4 message kinds; JSONL log + reducer; CLI (order entry, line-tail, inline replies); Flotilla.app (live chart, inspector, order console, escalation inbox, kill switch, cost ticker, minimal replay stepper); crew tools = sandboxed file I/O inside `missions/<id>/workspace/` only. Cross-platform code throughout; built and tested on macOS only in v0.1 (Windows/Linux builds are a CI task, not a design change). Demo mission: captain decomposes a literature scan across 3 crew on two providers and assembles a brief.
 
 **Out (backlog):** Google/Ollama adapters; depth-3+ default; shell/network tools for crew; polished replay scrubbing; external A2A interop; browser-served observatory; Ink TUI full-screen mode; multi-mission concurrency in one kernel.
 
