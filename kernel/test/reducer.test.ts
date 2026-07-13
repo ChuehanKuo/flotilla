@@ -5,9 +5,9 @@ import { reduce, nodeState } from '../src/reducer.js';
 function sampleLog(): EventLog {
   const log = new EventLog('m-1');
   log.append('mission.started', { order: 'scan fairness metrics' });
-  log.append('node.spawned', { nodeId: 'captain', role: 'captain', provider: 'anthropic', model: 'claude-sonnet-4-5', taskId: 't1' });
+  log.append('node.spawned', { nodeId: 'captain', role: 'captain', provider: 'anthropic', model: 'claude-sonnet-5', taskId: 't1' });
   log.append('task.state', { taskId: 't1', assignee: 'captain', state: 'working' });
-  log.append('node.spawned', { nodeId: 'crew-1', parentId: 'captain', role: 'metrics-scan', provider: 'openai', model: 'gpt-5.1', taskId: 't2' });
+  log.append('node.spawned', { nodeId: 'crew-1', parentId: 'captain', role: 'metrics-scan', provider: 'openai', model: 'gpt-5.6-sol', taskId: 't2' });
   log.append('task.state', { taskId: 't2', parentTaskId: 't1', assignee: 'crew-1', state: 'working' });
   log.append('usage', { nodeId: 'crew-1', costUsd: 0.12 });
   log.append('message', { kind: 'ESCALATE', from: 'crew-1', to: 'captain', taskId: 't2', text: 'include non-ICU?' });

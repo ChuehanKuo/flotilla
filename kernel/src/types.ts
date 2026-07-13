@@ -44,8 +44,9 @@ export interface MissionConfig {
   pricing: Record<string, { inputPerMTok: number; outputPerMTok: number }>;
 }
 
-// WHY these model ids/prices: current defaults at design time (2026-07);
-// they live in config, not code, so Task 13 can correct them without a code change.
+// WHY these model ids/prices: verified current at Task 13 review (2026-07-14)
+// against platform.claude.com (Claude Sonnet 5) and developers.openai.com (GPT-5.6 Sol);
+// they live in config, not code, so future drift can be corrected without a code change.
 export function defaultConfig(): MissionConfig {
   return {
     budgetUsd: 5,
@@ -56,15 +57,15 @@ export function defaultConfig(): MissionConfig {
     missionTimeoutMs: 1_800_000,
     maxStepsPerTurn: 12,
     models: {
-      captain: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+      captain: { provider: 'anthropic', model: 'claude-sonnet-5' },
       crew: [
-        { provider: 'anthropic', model: 'claude-sonnet-4-5' },
-        { provider: 'openai', model: 'gpt-5.1' },
+        { provider: 'anthropic', model: 'claude-sonnet-5' },
+        { provider: 'openai', model: 'gpt-5.6-sol' },
       ],
     },
     pricing: {
-      'claude-sonnet-4-5': { inputPerMTok: 3, outputPerMTok: 15 },
-      'gpt-5.1': { inputPerMTok: 1.25, outputPerMTok: 10 },
+      'claude-sonnet-5': { inputPerMTok: 3, outputPerMTok: 15 },
+      'gpt-5.6-sol': { inputPerMTok: 5, outputPerMTok: 30 },
     },
   };
 }

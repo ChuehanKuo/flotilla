@@ -15,6 +15,20 @@ An event-sourced coordination kernel for hierarchical, multi-provider AI agent f
 
 2026-07 research sweep: every orchestration framework treats its event stream as a tappable byproduct, not the substrate; every observability tool is post-hoc trace trees; nothing does fleet-scale live topology with message-injection steering. Details and citations in the spec.
 
+## Quickstart (v0.1)
+
+```bash
+npm install
+export ANTHROPIC_API_KEY=sk-… OPENAI_API_KEY=sk-…
+npx tsx cli/src/index.ts run "your mission order here" --budget 2
+# re-watch any past mission:
+npx tsx cli/src/index.ts replay missions/<mission-id>/events.jsonl
+```
+
+Every mission writes an append-only event log to `missions/<id>/events.jsonl` and a
+sandboxed crew workspace to `missions/<id>/workspace/`. Hard budget cap, depth cap,
+watchdog, and kill switch (Ctrl-C) are kernel-enforced.
+
 ## Protocol posture
 
 Message vocabulary aligned with [A2A](https://a2a-protocol.org) (Task lifecycle, Message/Part, artifacts); UI stream shaped by AG-UI categories; MCP remains the tool layer. Compatibility over compliance in v0.x.
