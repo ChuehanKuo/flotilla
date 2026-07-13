@@ -230,6 +230,17 @@ describe('EventLog', () => {
     expect(loaded[0].data).toEqual({ order: 'scan' });
     expect(loaded[1].seq).toBe(2);
   });
+
+  it('load skips unparseable lines instead of throwing', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'flotilla-')), 'events.jsonl');
+    const log = new EventLog('m-test', file);
+    log.append('mission.started', { order: 'scan' });
+    log.append('mission.completed', { result: 'ok' });
+    appendFileSync(file, '{"eventId":"trunc'); // simulated truncated final write
+    const loaded = EventLog.load(file);
+    expect(loaded).toHaveLength(2);
+    expect(loaded[1].type).toBe('mission.completed');
+  });
 });
 ```
 
@@ -351,7 +362,12 @@ export class EventLog {
     return readFileSync(filePath, 'utf8')
       .split('\n')
       .filter(Boolean)
-      .map(line => JSON.parse(line) as FleetEvent);
+      .flatMap(line => {
+        // WHY the guard: a truncated or hand-edited last line must not make a
+        // mission's entire history unreadable — skip what can't be parsed.
+        try { return [JSON.parse(line) as FleetEvent]; }
+        catch { return []; }
+      });
   }
 }
 ```
@@ -2057,6 +2073,20 @@ describe('replay', () => {
     expect(lines).toHaveLength(2); // task.state hidden
     expect(lines[0]).toContain('mission m-1 started');
     expect(lines[1]).toContain('completed');
+  });
+
+  it('renders a marker line for shape-malformed records instead of crashing', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'flotilla-replay-')), 'events.jsonl');
+    const events = [
+      { eventId: 'a', seq: 1, ts: '2026-07-13T12:00:00.000Z', missionId: 'm-1', type: 'mission.started', data: { order: 'scan' } },
+      // a message event missing data.text — formatEvent throws on d.text.length
+      { eventId: 'b', seq: 2, ts: '2026-07-13T12:00:01.000Z', missionId: 'm-1', type: 'message', data: { kind: 'REPORT', from: 'a', to: 'b', taskId: 't' } },
+    ];
+    writeFileSync(file, events.map(e => JSON.stringify(e)).join('\n') + '\n');
+    const lines: string[] = [];
+    await replay(file, {}, l => lines.push(l));
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain('malformed event (seq 2)');
   });
 });
 ```
