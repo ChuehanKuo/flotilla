@@ -153,10 +153,11 @@ export class CodexDriver implements TurnDriver {
       text = last && typeof last.text === 'string' ? last.text : stdout.trim();
     }
 
-    // WHY throw instead of returning '': an empty "success" would silently
-    // drain the pending-command-results queue and complete a node turn with
-    // nothing — fail loudly so retry-then-escalate surfaces it instead.
-    if (text === '') throw new Error('empty turn text from codex output');
+    // WHY throw instead of returning '' (and why trim(), not ===''): an empty
+    // or whitespace-only "success" would silently drain the pending-command-
+    // results queue and complete a node turn with nothing — fail loudly so
+    // retry-then-escalate surfaces it instead.
+    if (text.trim() === '') throw new Error('empty turn text from codex output');
 
     return { text, sessionId };
   }

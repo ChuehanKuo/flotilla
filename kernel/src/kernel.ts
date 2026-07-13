@@ -115,6 +115,11 @@ export class Mission {
         // a kernel-level rail (config), and node.ts's retry loop calls this once
         // per attempt — a spent cap must fail every retry, not just the first, so
         // the node's existing retry-then-escalate machinery surfaces it cleanly.
+        // This also means pre-cap transient retries (a failed attempt that gets
+        // retried before the cap is hit) consume attempts against the same
+        // counter — conservative by design, not a bug: a node that keeps
+        // failing and retrying burns down its turn budget rather than retrying
+        // forever underneath the cap.
         beforeModelCall: () => {
           const n = (this.turnCounts.get(nodeId) ?? 0) + 1;
           this.turnCounts.set(nodeId, n);
@@ -152,11 +157,12 @@ export class Mission {
 
     const fallback = this.config.models.crew[children.length % this.config.models.crew.length];
     const ref: NodeRef = (args.driver || args.provider)
-      ? {
-          driver: args.driver ?? 'api',
-          provider: args.provider,
-          model: args.model ?? (args.provider ? this.config.models.apiDefaults[args.provider] : undefined),
-        }
+      ? (() => {
+          const driver = args.driver ?? 'api';
+          if (driver !== 'api') return { driver, provider: args.provider, model: args.model };
+          const provider = args.provider ?? 'anthropic';
+          return { driver, provider, model: args.model ?? this.config.models.apiDefaults[provider] };
+        })()
       : fallback;
     const childId = this.spawn(fromNodeId, childDepth, false, args.role, args.charter, ref);
     const childTaskId = this.nodes.get(childId)!.spec.taskId;

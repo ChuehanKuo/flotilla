@@ -1,6 +1,6 @@
 # Flotilla
 
-**Status: design phase.** No code yet — the approved design lives in [`docs/specs/2026-07-13-flotilla-design.md`](docs/specs/2026-07-13-flotilla-design.md).
+**Status: v0.1 (kernel + CLI).** Design spec: [docs/specs/2026-07-13-flotilla-design.md](docs/specs/2026-07-13-flotilla-design.md) · desktop observatory app is the next phase.
 
 An event-sourced coordination kernel for hierarchical, multi-provider AI agent fleets — plus a persistent desktop observatory to watch and steer them live. For anyone running multi-agent work, on any terminal and any OS (macOS is the current reference platform).
 

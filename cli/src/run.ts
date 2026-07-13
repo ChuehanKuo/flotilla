@@ -48,12 +48,20 @@ export async function runMission(order: string, opts: { budget?: string; mission
     }
   }
   if (kindsUsed.has('claude-code')) {
-    try { await execFile('claude', ['--version']); }
-    catch { console.error(pc.red(`'claude' CLI not found or not working — install Claude Code and sign in, or switch this node's driver to 'api'`)); return 1; }
+    try { await execFile('claude', ['--version'], { timeout: 10_000 }); }
+    catch (err: any) {
+      const timedOut = err?.killed ? ' (timed out)' : '';
+      console.error(pc.red(`'claude' CLI not found or not working${timedOut} — install Claude Code and sign in, or switch this node's driver to 'api'`));
+      return 1;
+    }
   }
   if (kindsUsed.has('codex')) {
-    try { await execFile('codex', ['--version']); }
-    catch { console.error(pc.red(`'codex' CLI not found or not working — install the Codex CLI and sign in, or switch this node's driver to 'api'`)); return 1; }
+    try { await execFile('codex', ['--version'], { timeout: 10_000 }); }
+    catch (err: any) {
+      const timedOut = err?.killed ? ' (timed out)' : '';
+      console.error(pc.red(`'codex' CLI not found or not working${timedOut} — install the Codex CLI and sign in, or switch this node's driver to 'api'`));
+      return 1;
+    }
   }
 
   const missionsDir = opts.missionsDir ?? './missions';

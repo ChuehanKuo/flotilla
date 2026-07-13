@@ -50,6 +50,23 @@ describe('Mission happy path', () => {
     expect(res.result).toBe('FINAL: scoped brief');
   });
 
+  it('delegate({driver:"api"}) with no provider resolves a concrete provider+model, not undefined', async () => {
+    const refs: any[] = [];
+    const captain = scriptedModel([
+      { toolName: 'delegate', input: { role: 'a', charter: 'c', task: 't', driver: 'api' } },
+      { text: 'FINAL: done' },
+    ]);
+    let first = true;
+    const driverFactory = (ref: any) => {
+      refs.push(ref);
+      return new AiSdkDriver(first ? ((first = false), captain) : scriptedModel([{ toolName: 'deliver', input: { text: 'r' } }, { text: '' }]));
+    };
+    const mission = new Mission('x', defaultConfig(), { driverFactory });
+    const res = await mission.start();
+    expect(res.status).toBe('completed');
+    expect(refs[1]).toEqual({ driver: 'api', provider: 'anthropic', model: 'claude-sonnet-5' });
+  });
+
   it('delegate is refused beyond maxChildren', async () => {
     const cfg = { ...defaultConfig(), maxChildren: 1 };
     const captain = scriptedModel([

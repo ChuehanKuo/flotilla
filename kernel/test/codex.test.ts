@@ -228,6 +228,17 @@ describe('CodexDriver', () => {
     await expect(driver.turn(turnInput(fakeTools(), 'go'))).rejects.toThrow('empty turn text from codex output');
   });
 
+  it('throws when every agent_message event carries whitespace-only text, instead of returning an empty success', async () => {
+    const { workspaceDir, replyFile } = setup();
+    setReplyEvents(replyFile, [
+      { type: 'session_started', session_id: 'sess-1' },
+      { type: 'agent_message', text: '   \n  ' },
+    ]);
+    const driver = new CodexDriver({ workspaceDir, bin: FIXTURE });
+
+    await expect(driver.turn(turnInput(fakeTools(), 'go'))).rejects.toThrow('empty turn text from codex output');
+  });
+
   it('throws when a clean first-turn JSONL stream carries no session/thread id', async () => {
     const { workspaceDir, replyFile } = setup();
     // "clean" = valid, parseable JSONL — distinct from the raw-stdout-fallback
