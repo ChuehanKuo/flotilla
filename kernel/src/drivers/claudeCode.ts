@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { TurnDriver, TurnInput, TurnOutput } from '../driver.js';
-import { parseCommands, executeCommands, PROTOCOL_INSTRUCTIONS } from '../protocol.js';
+import { formatTurnPrompt, runTurnProtocol, PROTOCOL_INSTRUCTIONS } from '../protocol.js';
 
 const execFile = promisify(execFileCb);
 
@@ -32,7 +32,7 @@ export class ClaudeCodeDriver implements TurnDriver {
     // as `[KIND from …]` lines (and pending results add a `[command results]`
     // header), so `-p <text>` can't parse a leading token as a flag. If that
     // upstream invariant ever changes, revisit this call site.
-    const promptText = this.buildPromptText(input.newText);
+    const promptText = formatTurnPrompt(input.newText, this.pendingCommandResults);
     const args = this.buildArgs(promptText, input.system);
 
     // WHY no `env` override: execFile inherits process.env by default, which is
@@ -62,30 +62,15 @@ export class ClaudeCodeDriver implements TurnDriver {
     const inputTokens = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0;
     const outputTokens = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0;
 
-    const { commands, cleanText } = parseCommands(resultText);
-    this.pendingCommandResults = await executeCommands(commands, input.tools);
+    const { text, pendingCommandResults } = await runTurnProtocol(resultText, input.tools);
+    this.pendingCommandResults = pendingCommandResults;
 
     return {
-      text: cleanText,
+      text,
       responseMessages: [],
       usage: { inputTokens, outputTokens },
       billing: 'subscription',
     };
-  }
-
-  // Pure: never mutates pendingCommandResults — the queue is drained in turn()
-  // only after the CLI call succeeds, so a retried turn rebuilds the same prompt.
-  private buildPromptText(newText: string): string {
-    // WHY neutralize: text echoed into a prompt (a crew's delivered text, or an
-    // error branch's arbitrary err.message inside a command result) can contain
-    // a raw line-start ``` fence; if the CLI echoes it back verbatim,
-    // parseCommands must not mistake it for a real flotilla block on a later
-    // turn. Indenting by one space is cheap and reversible-by-eye.
-    const neutralize = (s: string) => s.replace(/^```/gm, ' ```');
-    const neutralized = neutralize(newText);
-    if (this.pendingCommandResults.length === 0) return neutralized;
-    const header = `[command results]\n${neutralize(this.pendingCommandResults.join('\n'))}`;
-    return `${header}\n\n${neutralized}`;
   }
 
   private buildArgs(promptText: string, system: string): string[] {

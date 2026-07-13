@@ -7,3 +7,4 @@ export { AiSdkDriver, type TurnDriver, type TurnInput, type TurnOutput } from '.
 export { Mission, type MissionDeps, type MissionResult } from './kernel.js';
 export { parseCommands, executeCommands, PROTOCOL_INSTRUCTIONS, type Command } from './protocol.js';
 export { ClaudeCodeDriver, type ClaudeCodeDriverOptions } from './drivers/claudeCode.js';
+export { CodexDriver, type CodexDriverOptions } from './drivers/codex.js';

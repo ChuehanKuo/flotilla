@@ -48,6 +48,40 @@ const COMMAND_SCHEMAS = {
   answer: z.object({ taskId: z.string(), text: z.string() }),
 } as const;
 
+// WHY neutralize: text echoed into a CLI-driver prompt (a crew's delivered text, or
+// an error branch's arbitrary err.message inside a command result) can contain a raw
+// line-start ``` fence; if the CLI echoes it back verbatim, parseCommands must not
+// mistake it for a real flotilla block on a later turn. Indenting by one space is
+// cheap and reversible-by-eye.
+function neutralizeFences(s: string): string {
+  return s.replace(/^```/gm, ' ```');
+}
+
+// WHY shared here, not per-driver: prompt-shaping (fence neutralization + prefixing
+// the queued command-result acks) is identical across every CLI driver — duplicating
+// it risks one driver's copy drifting (e.g. forgetting to neutralize the joined
+// queue, the Task P3 review's Minor 1). Pure: takes the queue by value, never
+// mutates driver state — draining stays the caller's job, timed around the fallible
+// subprocess call for retry coherence.
+export function formatTurnPrompt(newText: string, pendingCommandResults: string[]): string {
+  const neutralized = neutralizeFences(newText);
+  if (pendingCommandResults.length === 0) return neutralized;
+  const header = `[command results]\n${neutralizeFences(pendingCommandResults.join('\n'))}`;
+  return `${header}\n\n${neutralized}`;
+}
+
+// WHY this is the shared tail of every driver's turn(): once a CLI reply has been
+// reduced to its result text, parsing the flotilla block and executing any commands
+// is identical regardless of which CLI produced that text.
+export async function runTurnProtocol(
+  resultText: string,
+  tools: ToolSet,
+): Promise<{ text: string; pendingCommandResults: string[] }> {
+  const { commands, cleanText } = parseCommands(resultText);
+  const pendingCommandResults = await executeCommands(commands, tools);
+  return { text: cleanText, pendingCommandResults };
+}
+
 export async function executeCommands(commands: Command[], tools: ToolSet): Promise<string[]> {
   const results: string[] = [];
   for (const element of commands as unknown[]) {
