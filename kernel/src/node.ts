@@ -1,0 +1,79 @@
+import { generateText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import type { EventLog } from './log.js';
+import type { FleetMessage } from './types.js';
+
+export interface NodeSpec {
+  id: string; parentId: string; role: string; charter: string;
+  taskId: string; depth: number; captain: boolean;
+}
+
+export interface NodeDeps {
+  model: LanguageModel;
+  tools: ToolSet;
+  log: EventLog;
+  maxStepsPerTurn: number;
+  beforeModelCall(): void;
+  onUsage(nodeId: string, usage: { inputTokens: number; outputTokens: number }): void;
+  onTurnEnd(nodeId: string, finalText: string): void;
+  onModelFailure(nodeId: string, error: string): void;
+  abortSignal: AbortSignal;
+}
+
+export class AgentNode {
+  private transcript: ModelMessage[] = [];
+  private pending: FleetMessage[] = [];
+  private running = false;
+
+  constructor(readonly spec: NodeSpec, private deps: NodeDeps) {}
+
+  get busy(): boolean { return this.running; }
+
+  enqueue(msg: FleetMessage): void {
+    this.pending.push(msg);
+    if (!this.running) void this.runLoop();
+  }
+
+  private async runLoop(): Promise<void> {
+    this.running = true;
+    try {
+      while (this.pending.length > 0) {
+        const batch = this.pending.splice(0);
+        const text = batch.map(m => `[${m.kind} from ${m.from} · task ${m.taskId}] ${m.text}`).join('\n\n');
+        this.transcript.push({ role: 'user', content: text });
+        const result = await this.callModelWithRetry();
+        if (!result) return; // failure already reported
+        this.transcript.push(...result.response.messages);
+        this.deps.onUsage(this.spec.id, {
+          inputTokens: result.usage.inputTokens ?? 0,
+          outputTokens: result.usage.outputTokens ?? 0,
+        });
+        this.deps.onTurnEnd(this.spec.id, result.text);
+      }
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async callModelWithRetry() {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        this.deps.beforeModelCall();
+        return await generateText({
+          model: this.deps.model,
+          system: this.spec.charter,
+          messages: this.transcript,
+          tools: this.deps.tools,
+          stopWhen: stepCountIs(this.deps.maxStepsPerTurn),
+          abortSignal: this.deps.abortSignal,
+        });
+      } catch (err) {
+        if (this.deps.abortSignal.aborted) return null;
+        if (attempt === 1) {
+          this.deps.onModelFailure(this.spec.id, String(err));
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+}
