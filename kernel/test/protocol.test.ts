@@ -80,6 +80,13 @@ describe('parseCommands', () => {
     const text = '```flotilla\n{"foo":1}\n```';
     expect(parseCommands(text)).toEqual({ commands: [], cleanText: text });
   });
+
+  it('a deliver whose text contains inline ``` fences (escaped within the JSON string) parses fully', () => {
+    const text = '```flotilla\n{"commands":[{"cmd":"deliver","text":"use ``` code ``` fences"}]}\n```';
+    const { commands, cleanText } = parseCommands(text);
+    expect(commands).toEqual<Command[]>([{ cmd: 'deliver', text: 'use ``` code ``` fences' }]);
+    expect(cleanText).toBe('');
+  });
 });
 
 describe('executeCommands', () => {
@@ -149,6 +156,40 @@ describe('executeCommands', () => {
     const results = await executeCommands(commands, tools);
     expect(results).toEqual(['report → report-ok', 'deliver → error: boom']);
   });
+
+  it('a null command element yields an unknown-command error string and the promise resolves', async () => {
+    await expect(executeCommands([null as unknown as Command], fakeTools()))
+      .resolves.toEqual(['null → error: unknown command']);
+  });
+
+  it('a bare number command element yields an unknown-command error string', async () => {
+    await expect(executeCommands([42 as unknown as Command], fakeTools()))
+      .resolves.toEqual(['42 → error: unknown command']);
+  });
+
+  it('wrong-typed args fail validation with an invalid-arguments string and the tool is NOT called', async () => {
+    const deliver = vi.fn(async () => 'delivered');
+    const tools = fakeTools({ deliver });
+    const results = await executeCommands([{ cmd: 'deliver', text: { a: 1 } } as unknown as Command], tools);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatch(/^deliver → error: invalid arguments: text /);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it('delegate with a non-string role fails validation without a tool call', async () => {
+    const delegate = vi.fn(async () => 'spawned');
+    const tools = fakeTools({ delegate });
+    const results = await executeCommands(
+      [{ cmd: 'delegate', role: 123, charter: 'c', task: 't' } as unknown as Command], tools);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatch(/^delegate → error: invalid arguments: role /);
+    expect(delegate).not.toHaveBeenCalled();
+  });
+
+  it('prototype-chain cmd names (e.g. "constructor") are unknown commands', async () => {
+    await expect(executeCommands([{ cmd: 'constructor' } as unknown as Command], fakeTools()))
+      .resolves.toEqual(['constructor → error: unknown command']);
+  });
 });
 
 describe('PROTOCOL_INSTRUCTIONS', () => {
@@ -158,5 +199,10 @@ describe('PROTOCOL_INSTRUCTIONS', () => {
     expect(PROTOCOL_INSTRUCTIONS).toContain('```flotilla');
     expect(PROTOCOL_INSTRUCTIONS).toContain('"commands"');
     expect(PROTOCOL_INSTRUCTIONS.toLowerCase()).toContain('deliver');
+  });
+
+  it('documents the own-line fence rule and marks report as crew only', () => {
+    expect(PROTOCOL_INSTRUCTIONS).toContain('own line');
+    expect(PROTOCOL_INSTRUCTIONS).toContain('crew only');
   });
 });
