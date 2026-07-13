@@ -2198,6 +2198,192 @@ git commit -m "docs: quickstart; verify live demo mission on two providers"
 
 ---
 
+---
+
+# Phase 2 — Subscription pivot (approved 2026-07-14)
+
+> Operator decision: v0.1's demo runs on subscription CLIs (Claude Code on the Claude sub, Codex on the OpenAI sub), not API keys. The `api` driver stays fully supported for open-source users. Spec §3.1/§4/§5 amended same day. Tasks P1–P6 below replace the original Task 13 Step 2 (live API demo).
+
+**Phase-2 Global Constraints (in addition to the originals):**
+- `TurnDriver` is the single seam: `turn(input: TurnInput): Promise<TurnOutput>`. AgentNode/kernel never know which runtime produced a turn.
+- CLI drivers are tested against **stub binaries** (shell scripts passed via `bin` option) — tests never invoke the real `claude`/`codex` or any subscription.
+- Coordination from CLI nodes travels as one fenced ` ```flotilla ` JSON block: `{"commands":[...]}` — parsed by `parseCommands`, executed against the SAME coordination ToolSet. Command results are queued by the driver and prefixed to the node's next turn.
+- Subscription turns report `billing: 'subscription'`; kernel logs their usage with `costUsd: 0` (never run subscription usage through the pricing table — the max-rate fallback would false-trip the cap). `$` cap continues to bite for `billing: 'api'`.
+- New rail: `maxTurnsPerNode` (default 20), kernel-enforced in `beforeModelCall` via per-node counters → existing retry-then-escalate machinery.
+- `watchdogMs` default becomes 600_000 (CLI turns are slow).
+- If the installed `claude`/`codex` CLI's flags differ from the plan's invocation, adapt the arg-builder functions only — never the driver's TurnDriver contract or the tests' observable behavior (stub binaries pin the contract).
+
+### Task P1: TurnDriver seam + AiSdkDriver refactor
+
+**Files:**
+- Create: `kernel/src/driver.ts`
+- Modify: `kernel/src/types.ts` (NodeRef/DriverKind, config shape), `kernel/src/node.ts` (driver instead of model), `kernel/src/kernel.ts` (driverFactory, ref resolution, billing-aware usage), `kernel/src/tools/coordination.ts` (delegate schema: driver enum), `kernel/src/providers.ts` (keep realModelFactory; export type DriverFactory), `kernel/src/index.ts` (exports), `cli/src/run.ts` (api-key gate only for api refs; temporary factory), and all affected tests (`node.test.ts`, `kernel.test.ts`, `rails.test.ts`, `coordination.test.ts`)
+- Test: assertions updated in place; no new test file
+
+**Interfaces:**
+- Produces (exact):
+  ```ts
+  // types.ts additions/changes
+  export type DriverKind = 'api' | 'claude-code' | 'codex';
+  export interface NodeRef { driver: DriverKind; provider?: Provider; model?: string }
+  // MissionConfig.models becomes:
+  //   models: { captain: NodeRef; crew: NodeRef[]; apiDefaults: Record<Provider, string> }
+  // defaultConfig(): captain { driver: 'claude-code' }, crew [{ driver: 'claude-code' }, { driver: 'codex' }],
+  //   apiDefaults { anthropic: 'claude-sonnet-5', openai: 'gpt-5.6-sol' }; watchdogMs: 600_000; maxTurnsPerNode: 20 (field added; enforcement lands in P5)
+
+  // driver.ts
+  export interface TurnInput {
+    system: string;
+    newText: string;                    // this turn's incoming batch, formatted
+    transcript: ModelMessage[];         // full history incl. the new user message (api driver)
+    tools: ToolSet;
+    maxSteps: number;
+    abortSignal: AbortSignal;
+  }
+  export interface TurnOutput {
+    text: string;
+    responseMessages: ModelMessage[];   // [] for CLI drivers
+    usage: { inputTokens: number; outputTokens: number };
+    billing: 'api' | 'subscription';
+  }
+  export interface TurnDriver { turn(input: TurnInput): Promise<TurnOutput> }
+  export class AiSdkDriver implements TurnDriver { constructor(model: LanguageModel) }
+
+  // providers.ts
+  export type DriverFactory = (ref: NodeRef, ctx: { workspaceDir: string }) => TurnDriver;
+
+  // kernel.ts
+  export interface MissionDeps { driverFactory: DriverFactory; missionsDir?: string }
+  // NodeDeps.onUsage gains billing: onUsage(nodeId, usage, billing)
+  ```
+- Delegate ref resolution in `kernel.delegate` (exact):
+  ```ts
+  const fallback = this.config.models.crew[children.length % this.config.models.crew.length];
+  const ref: NodeRef = (args.driver || args.provider)
+    ? {
+        driver: args.driver ?? 'api',
+        provider: args.provider,
+        model: args.model ?? (args.provider ? this.config.models.apiDefaults[args.provider] : undefined),
+      }
+    : fallback;
+  ```
+- `AiSdkDriver.turn` body = today's `generateText` call verbatim, returning `{ text, responseMessages: result.response.messages, usage: { inputTokens: result.usage.inputTokens ?? 0, outputTokens: result.usage.outputTokens ?? 0 }, billing: 'api' }`.
+- `AgentNode.runLoop` change: `const result = await this.callDriverWithRetry(text)` where `callDriverWithRetry` calls `this.deps.driver.turn({ system: this.spec.charter, newText: text, transcript: this.transcript, tools: this.deps.tools, maxSteps: this.deps.maxStepsPerTurn, abortSignal: this.deps.abortSignal })` with the same 2-attempt/abort/failure semantics as before; then `this.transcript.push(...result.responseMessages); this.deps.onUsage(this.spec.id, result.usage, result.billing); this.deps.onTurnEnd(this.spec.id, result.text);`.
+- Kernel `onUsage` closure (exact):
+  ```ts
+  onUsage: (id, usage, billing) => {
+    const modelId = ref.model ?? (ref.provider ? this.config.models.apiDefaults[ref.provider] : 'unknown');
+    const costUsd = billing === 'api' ? this.budget.addUsage(id, modelId, usage) : 0;
+    this.log.append('usage', { nodeId: id, ...usage, costUsd, billing });
+  },
+  ```
+- Coordination delegate schema replaces the provider enum with:
+  ```ts
+  driver: z.enum(['api', 'claude-code', 'codex']).optional().describe('runtime for this crew agent; omit for mission default'),
+  provider: z.enum(['anthropic', 'openai']).optional().describe('api driver only'),
+  model: z.string().optional(),
+  ```
+- Test sweep (mechanical, complete list): every `modelFactory: () => X` becomes `driverFactory: () => new AiSdkDriver(X)`; node tests build deps with `driver: new AiSdkDriver(model)`; the kernel happy-path provider assertion becomes — captured refs `[{driver:'claude-code'}, {driver:'api',provider:'anthropic',model:'claude-sonnet-5'}, {driver:'api',provider:'openai',model:'gpt-5.6-sol'}]` — assert `refs.map(r => r.driver)` equals `['claude-code','api','api']` and `refs.slice(1).map(r => r.provider)` equals `['anthropic','openai']`. `cli/src/run.ts`: build a temporary factory `const driverFactory: DriverFactory = (ref) => { if (ref.driver !== 'api') throw new Error(\`driver not implemented yet: ${ref.driver} (P3/P4)\`); return new AiSdkDriver(realModelFactory({ provider: ref.provider ?? 'anthropic', model: ref.model ?? config.models.apiDefaults[ref.provider ?? 'anthropic'] })); }` and gate env keys only over refs with `driver === 'api'` (with the pivoted defaults that set is empty — the run command still compiles and runs for api configs).
+
+Steps: update types → driver.ts + failing-compile sweep → run full suite → all 35 must pass again → commit `refactor(kernel): TurnDriver seam; subscription-first default config`.
+
+### Task P2: JSON command protocol
+
+**Files:**
+- Create: `kernel/src/protocol.ts`
+- Test: `kernel/test/protocol.test.ts`
+
+**Interfaces (exact):**
+```ts
+export type Command =
+  | { cmd: 'delegate'; role: string; charter: string; task: string; driver?: DriverKind }
+  | { cmd: 'report'; text: string }
+  | { cmd: 'deliver'; text: string }
+  | { cmd: 'escalate'; question: string }
+  | { cmd: 'answer'; taskId: string; text: string };
+export function parseCommands(text: string): { commands: Command[]; cleanText: string };
+export async function executeCommands(commands: Command[], tools: ToolSet): Promise<string[]>;
+export const PROTOCOL_INSTRUCTIONS: string;
+```
+Behavior to pin with tests: (1) extracts the LAST fenced block labeled `flotilla` containing `{"commands":[...]}`, removes it from cleanText, returns typed commands; (2) invalid JSON / no block / unlabeled block → `{ commands: [], cleanText: text }`; (3) `executeCommands` maps cmd→tool name (delegate/report/deliver/escalate/answer), calls `tool.execute(argsWithoutCmd, { toolCallId: 'proto', messages: [] })`, collects `"<cmd> → <result>"` strings; unknown cmd or missing tool → `"<cmd> → error: unknown command"`; a throwing execute → `"<cmd> → error: <message>"` (never rejects). (4) `PROTOCOL_INSTRUCTIONS` teaches the fenced-block format and mandates ending with a `deliver` command when the task is done. TDD, commit `feat(kernel): fenced JSON command protocol for CLI-driver nodes`.
+
+### Task P3: ClaudeCodeDriver
+
+**Files:**
+- Create: `kernel/src/drivers/claudeCode.ts`, `kernel/test/fixtures/fake-claude.sh` (chmod +x)
+- Test: `kernel/test/claudeCode.test.ts`
+
+**Contract:** `new ClaudeCodeDriver({ workspaceDir, bin?, timeoutMs? })` implements TurnDriver.
+- First turn args: `['-p', promptText, '--output-format', 'json', '--append-system-prompt', system + '\n\n' + PROTOCOL_INSTRUCTIONS, '--allowedTools', 'Read,Write,Edit,Glob,Grep']`; later turns replace the system flag with `['--resume', sessionId]`. `promptText` = pending command results (if any, under a `[command results]` header) + newText. Spawn via `execFile(bin ?? 'claude', args, { cwd: workspaceDir, signal, timeout: timeoutMs ?? 600_000, maxBuffer: 10 * 2 ** 20 })`.
+- Parse stdout as JSON: `{ result, session_id, usage: { input_tokens, output_tokens } }` (fields defensive-defaulted). Store `session_id`. `parseCommands(result)` → `executeCommands(...)` → queue result strings for next turn. Return `{ text: cleanText, responseMessages: [], usage, billing: 'subscription' }`. Unparseable stdout → throw (node retry-then-escalate handles it).
+- Stub binary `fake-claude.sh`: appends its argv as one JSON line to the file named by env `FAKE_CLI_LOG`, then prints a canned JSON payload selected by env `FAKE_CLI_REPLY` (allows scripting two-turn tests). Tests pin: first-turn args include `--append-system-prompt` (with PROTOCOL_INSTRUCTIONS) and NOT `--resume`; second turn includes `--resume <session_id from first reply>`; a reply whose `result` carries a ` ```flotilla ` deliver block causes the deliver tool to fire (fake ToolSet records calls) and the block is stripped from returned text; command results from turn 1 appear in turn 2's prompt under `[command results]`.
+Commit `feat(kernel): ClaudeCodeDriver — headless claude -p on subscription auth`.
+
+### Task P4: CodexDriver
+
+**Files:**
+- Create: `kernel/src/drivers/codex.ts`, `kernel/test/fixtures/fake-codex.sh`
+- Test: `kernel/test/codex.test.ts`
+
+Same shape as P3 with codex specifics: first turn `['exec', promptText, '--json', '--cd', workspaceDir, '--sandbox', 'workspace-write']`; later turns `['exec', 'resume', sessionId, promptText, '--json', '--cd', workspaceDir, '--sandbox', 'workspace-write']`. Stdout is JSONL events: collect `session_id`/`thread_id` from the first event carrying one; final text = concatenation of events with `type` containing `agent_message` (fallback: last line's `text` field; final fallback: raw stdout). System prompt + PROTOCOL_INSTRUCTIONS prefix the FIRST turn's promptText under a `[role charter]` header (codex exec has no system-prompt flag). Same command-execution/pending-results queue as P3 (extract the shared logic into a small `runProtocol(text, tools, pending)` helper in `protocol.ts` if duplication exceeds ~10 lines — allowed, flag in report). Arg-builders isolated as `firstArgs()`/`resumeArgs()` for cheap adaptation if the installed CLI's syntax differs (verify with `codex exec --help` during implementation; adapt builders only). Stub-tested identically. Commit `feat(kernel): CodexDriver — codex exec on subscription auth`.
+
+### Task P5: Wiring — realDriverFactory, preflight, turn-cap rail, README
+
+**Files:**
+- Modify: `kernel/src/providers.ts` (realDriverFactory), `kernel/src/kernel.ts` (turn-cap in beforeModelCall), `kernel/src/index.ts`, `cli/src/run.ts` (preflight replaces temp factory), `README.md`
+- Test: `kernel/test/rails.test.ts` (turn-cap test), `cli/test/` untouched
+
+1. `realDriverFactory` (exact):
+```ts
+export const realDriverFactory: DriverFactory = (ref, ctx) => {
+  if (ref.driver === 'claude-code') return new ClaudeCodeDriver({ workspaceDir: ctx.workspaceDir });
+  if (ref.driver === 'codex') return new CodexDriver({ workspaceDir: ctx.workspaceDir });
+  const provider = ref.provider ?? 'anthropic';
+  return new AiSdkDriver(realModelFactory({ provider, model: ref.model ?? 'unset' }));
+};
+```
+(run.ts resolves api model ids from `config.models.apiDefaults` before refs reach the factory — kernel's delegate resolution already does; captain ref from config must carry its model when api.)
+2. Turn cap: kernel keeps `private turnCounts = new Map<string, number>()`; `beforeModelCall` closure becomes:
+```ts
+beforeModelCall: () => {
+  const n = (this.turnCounts.get(nodeId) ?? 0) + 1;
+  this.turnCounts.set(nodeId, n);
+  if (n > this.config.maxTurnsPerNode) throw new Error(`TurnCapError: ${nodeId} exceeded ${this.config.maxTurnsPerNode} turns`);
+  this.budget.assertUnderCap();
+},
+```
+Rails test: config `maxTurnsPerNode: 0` → captain's first call fails twice → escalates to operator (assert the operator escalation text contains 'TurnCapError').
+3. run.ts preflight: for kinds used in config — `api` → env-key gate (as now); `claude-code` → `execFile('claude', ['--version'])`; `codex` → `execFile('codex', ['--version'])`; failure → clear stderr line + exit 1.
+4. README Quickstart rewritten subscription-first:
+```markdown
+## Quickstart (v0.1)
+
+Flotilla's default config rides the agent CLIs you already have:
+[Claude Code](https://claude.com/claude-code) (`claude`) and OpenAI's Codex CLI
+(`codex`), each signed in on its own subscription — no API keys, $0 marginal.
+
+```bash
+npm install
+npx tsx cli/src/index.ts run "your mission order here"
+# re-watch any past mission:
+npx tsx cli/src/index.ts replay missions/<mission-id>/events.jsonl
+```
+
+Prefer raw APIs? Point the config at the `api` driver and export
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`; the hard dollar cap applies there
+(`--budget`, default $5). Subscription nodes are bounded by per-node turn
+caps, depth caps, a watchdog, and mission timeouts instead.
+```
+Full suite + typecheck; commit `feat: subscription-first wiring — driver factory, preflight, turn cap`.
+
+### Task P6: Live subscription demo (replaces original Task 13 Step 2)
+
+Preconditions: `claude --version` and `codex --version` both succeed and are signed in (subscription auth). NO API keys required or read.
+1. Run: `npx tsx cli/src/index.ts run "Survey the fairness metrics most commonly used to evaluate ICU mortality-risk prediction models. Delegate scanning and critique to separate crew, then deliver a structured brief."`
+2. Acceptance (all four): (a) line-tail shows captain on `claude-code` and ≥1 crew on `codex` (spawn lines name the driver — add driver to the `node.spawned` render if absent: `+ crew-2 spawned (codex)`); (b) `── DELIVERABLE ──` brief prints, exit 0; (c) `missions/<id>/events.jsonl` exists and `replay` re-renders it; (d) usage events show `billing: subscription`, cost ticker stays $0.00. If a watchdog escalation fires mid-run (CLI turns are slow), answer it (`keep going`) — that path is by design.
+3. If the captain ignores the JSON protocol (no commands in output): inspect `events.jsonl`, tighten `PROTOCOL_INSTRUCTIONS` wording once, re-run once. Two protocol failures → BLOCKED with the transcript evidence.
+4. Ledger + commit `docs: live subscription demo verified` (include the mission id + cost line in the commit body).
+
 ## Self-Review (completed inline)
 
 1. **Spec coverage:** kernel ✓ (T2–T10), 2 providers ✓ (T5, T13), captain+crew depth-2 ✓ (T9), 4+ANSWER message kinds ✓ (T7/T9), JSONL log + reducer ✓ (T2–T3), CLI order entry/line-tail/inline replies ✓ (T11), replay stepper ✓ (T12), sandboxed file I/O ✓ (T6), all §4 rails ✓ (T9 caps, T10 budget/watchdog/timeout/cancel, T8 retry-then-escalate), demo mission ✓ (T13). Observatory app: explicitly out — separate plan. Gap check: none found.
