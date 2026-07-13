@@ -1276,19 +1276,6 @@ import { Mission } from '../src/kernel.js';
 import { defaultConfig } from '../src/types.js';
 import { scriptedModel } from './helpers.js';
 
-// Two crew on "different providers"; captain delegates, crew deliver, captain synthesizes.
-function twoCrewModels() {
-  const captain = scriptedModel([
-    { toolName: 'delegate', input: { role: 'scan-a', charter: 'Scan A things.', task: 'scan A', provider: 'anthropic' } },
-    { toolName: 'delegate', input: { role: 'scan-b', charter: 'Scan B things.', task: 'scan B', provider: 'openai' } },
-    { text: 'delegated, awaiting results' },   // ends captain turn 1
-    { text: 'FINAL BRIEF: A+B synthesized' },  // captain turn 2 (auto-deliver fallback)
-  ]);
-  const crew = () => scriptedModel([{ toolName: 'deliver', input: { text: 'crew result' } }, { text: '' }]);
-  let crewCount = 0;
-  return (ref: { provider: string }) => (ref === undefined || crewCount++ === -1 ? captain : crewCount === 0 ? captain : crew());
-}
-
 describe('Mission happy path', () => {
   it('captain delegates to two crew, crew deliver, mission completes with synthesis', async () => {
     const models: any[] = [];
@@ -1340,9 +1327,7 @@ describe('Mission happy path', () => {
       { toolName: 'delegate', input: { role: 'b', charter: 'c', task: 't' } },
       { text: 'FINAL: done with one crew' },
     ]);
-    const modelFactory = (ref: any) =>
-      ref.__used ? scriptedModel([{ text: 'x' }]) : ((ref.__used = true), captain);
-    // simpler: first call captain, later calls crew
+    // first modelFactory call is the captain, later calls are crew
     let first = true;
     const mission = new Mission('x', cfg, {
       modelFactory: () => (first ? ((first = false), captain) : scriptedModel([{ toolName: 'deliver', input: { text: 'r' } }, { text: '' }])),
