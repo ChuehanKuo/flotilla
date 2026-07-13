@@ -1,0 +1,192 @@
+import { mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { EventLog } from './log.js';
+import { reduce, type FleetState } from './reducer.js';
+import { BudgetTracker } from './budget.js';
+import { AgentNode } from './node.js';
+import { makeFileTools } from './tools/files.js';
+import { makeCoordinationTools, type KernelApi } from './tools/coordination.js';
+import type { ModelFactory } from './providers.js';
+import type { FleetMessage, MissionConfig, Provider, TaskState } from './types.js';
+
+export interface MissionDeps { modelFactory: ModelFactory; missionsDir?: string }
+export interface MissionResult { status: 'completed' | 'canceled' | 'failed'; result?: string; reason?: string; totalCostUsd: number }
+
+const CAPTAIN_CHARTER = `You are the mission captain of an agent fleet. The operator's order follows as your task.
+Decompose it into parallel subtasks and spawn crew with the delegate tool (each gets a
+focused charter and task). Crew results arrive later as DELIVER messages; answer crew
+ESCALATE questions with the answer tool when you can, escalate to the operator only when
+you genuinely cannot decide. When all crew work is in, synthesize and call deliver with
+the complete final result. Never do large subtasks yourself — delegate.`;
+
+const CREW_SUFFIX = `
+---
+You are one crew agent in a fleet. Work only your assigned task. Use report for interim
+progress, escalate when you need a decision, and end by calling deliver with your complete
+result. You have file tools scoped to a shared mission workspace.`;
+
+export class Mission {
+  readonly id: string;
+  readonly log: EventLog;
+  private nodes = new Map<string, AgentNode>();
+  private counter = 0;
+  private budget: BudgetTracker;
+  private workspaceDir: string;
+  private abort = new AbortController();
+  private escalationCb?: (e: { taskId: string; from: string; text: string }) => void;
+  private resolveResult!: (r: MissionResult) => void;
+  private done = false;
+
+  constructor(private order: string, private config: MissionConfig, private deps: MissionDeps) {
+    this.id = `m-${Date.now().toString(36)}`;
+    if (deps.missionsDir) {
+      const dir = join(deps.missionsDir, this.id);
+      this.workspaceDir = join(dir, 'workspace');
+      mkdirSync(this.workspaceDir, { recursive: true });
+      this.log = new EventLog(this.id, join(dir, 'events.jsonl'));
+    } else {
+      this.workspaceDir = mkdtempSync(join(tmpdir(), 'flotilla-ws-'));
+      this.log = new EventLog(this.id);
+    }
+    this.budget = new BudgetTracker(config.pricing, config.budgetUsd);
+  }
+
+  state(): FleetState { return reduce(this.log.events); }
+  onOperatorEscalation(cb: (e: { taskId: string; from: string; text: string }) => void) { this.escalationCb = cb; }
+
+  answerEscalation(taskId: string, text: string): void {
+    this.route({ kind: 'ANSWER', from: 'operator', to: '', taskId, text });
+  }
+
+  cancel(reason: string): void { this.finish({ status: 'canceled', reason, totalCostUsd: this.budget.totalUsd }, 'mission.canceled', { reason }); }
+
+  start(): Promise<MissionResult> {
+    const promise = new Promise<MissionResult>(res => { this.resolveResult = res; });
+    this.log.append('mission.started', { order: this.order, config: { budgetUsd: this.config.budgetUsd, maxDepth: this.config.maxDepth } });
+    const captainId = this.spawn('operator', 1, true, 'captain', CAPTAIN_CHARTER, this.config.models.captain);
+    this.route({ kind: 'ORDER', from: 'operator', to: captainId, taskId: this.nodes.get(captainId)!.spec.taskId, text: this.order });
+    // Task 10 adds: watchdog interval + mission wall-clock timeout here.
+    return promise;
+  }
+
+  private finish(result: MissionResult, eventType: 'mission.completed' | 'mission.canceled' | 'mission.failed', data: Record<string, unknown>): void {
+    if (this.done) return;
+    this.done = true;
+    this.abort.abort();
+    this.log.append(eventType, data);
+    this.resolveResult(result);
+  }
+
+  private taskStateOf(taskId: string): TaskState { return this.state().tasks[taskId]?.state; }
+
+  private spawn(parentId: string, depth: number, captain: boolean, role: string, charter: string, ref: { provider: Provider; model: string }): string {
+    this.counter++;
+    const nodeId = captain ? 'captain' : `${role.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${this.counter}`;
+    const taskId = `t${this.counter}`;
+    const parentTaskId = parentId === 'operator' ? undefined : this.nodes.get(parentId)?.spec.taskId;
+    this.log.append('node.spawned', { nodeId, parentId: parentId === 'operator' ? undefined : parentId, role, provider: ref.provider, model: ref.model, taskId });
+    this.log.append('task.state', { taskId, parentTaskId, assignee: nodeId, state: 'submitted' });
+
+    const api: KernelApi = {
+      delegate: (from, args) => this.delegate(from, args),
+      emitMessage: (msg) => this.route(msg),
+    };
+    const tools = {
+      ...makeCoordinationTools({ nodeId, taskId, parentId, captain }, api),
+      ...(captain ? {} : makeFileTools(this.workspaceDir)),
+    };
+    const node = new AgentNode(
+      { id: nodeId, parentId, role, charter: captain ? charter : charter + CREW_SUFFIX, taskId, depth, captain },
+      {
+        model: this.deps.modelFactory(ref),
+        tools,
+        log: this.log,
+        maxStepsPerTurn: this.config.maxStepsPerTurn,
+        beforeModelCall: () => {}, // Task 10: budget gate
+        onUsage: (id, usage) => {
+          const costUsd = this.budget.addUsage(id, ref.model, usage);
+          this.log.append('usage', { nodeId: id, ...usage, costUsd });
+        },
+        onTurnEnd: (id, finalText) => this.handleTurnEnd(id, finalText),
+        onModelFailure: (id, error) => this.handleModelFailure(id, error),
+        abortSignal: this.abort.signal,
+      },
+    );
+    this.nodes.set(nodeId, node);
+    return nodeId;
+  }
+
+  private delegate(fromNodeId: string, args: { role: string; charter: string; task: string; provider?: Provider; model?: string }): string {
+    const parent = this.nodes.get(fromNodeId)!;
+    const childDepth = parent.spec.depth + 1;
+    if (childDepth > this.config.maxDepth) return 'refused: depth cap reached';
+    const children = [...this.nodes.values()].filter(n => n.spec.parentId === fromNodeId);
+    if (children.length >= this.config.maxChildren) return 'refused: max children reached';
+    const live = [...this.nodes.values()].filter(n => !['completed', 'failed', 'canceled'].includes(this.taskStateOf(n.spec.taskId)));
+    if (live.length >= this.config.maxConcurrentNodes) return 'refused: max concurrent nodes reached';
+
+    const fallback = this.config.models.crew[children.length % this.config.models.crew.length];
+    const ref = { provider: args.provider ?? fallback.provider, model: args.model ?? (args.provider ? this.config.models.crew.find(c => c.provider === args.provider)?.model ?? fallback.model : fallback.model) };
+    const childId = this.spawn(fromNodeId, childDepth, false, args.role, args.charter, ref);
+    const childTaskId = this.nodes.get(childId)!.spec.taskId;
+    this.route({ kind: 'ORDER', from: fromNodeId, to: childId, taskId: childTaskId, text: args.task });
+    return `spawned ${childId} (task ${childTaskId})`;
+  }
+
+  private route(msg: FleetMessage): void {
+    if (this.done) return;
+    const assignee = this.state().tasks[msg.taskId]?.assignee;
+    const resolved = { ...msg, to: msg.kind === 'ANSWER' ? assignee ?? msg.to : msg.to };
+    this.log.append('message', { ...resolved });
+    switch (resolved.kind) {
+      case 'ORDER':
+        this.log.append('task.state', { taskId: resolved.taskId, state: 'working' });
+        this.nodes.get(resolved.to)?.enqueue(resolved);
+        break;
+      case 'ESCALATE':
+        this.log.append('task.state', { taskId: resolved.taskId, state: 'input-required' });
+        if (resolved.to === 'operator') this.escalationCb?.({ taskId: resolved.taskId, from: resolved.from, text: resolved.text });
+        else this.nodes.get(resolved.to)?.enqueue(resolved);
+        break;
+      case 'ANSWER':
+        this.log.append('task.state', { taskId: resolved.taskId, state: 'working' });
+        this.nodes.get(resolved.to)?.enqueue(resolved);
+        break;
+      case 'REPORT':
+        if (resolved.to !== 'operator') this.nodes.get(resolved.to)?.enqueue(resolved);
+        break;
+      case 'DELIVER': {
+        this.log.append('task.state', { taskId: resolved.taskId, state: 'completed' });
+        if (resolved.to === 'operator') {
+          this.finish({ status: 'completed', result: resolved.text, totalCostUsd: this.budget.totalUsd }, 'mission.completed', { result: resolved.text });
+        } else {
+          this.nodes.get(resolved.to)?.enqueue(resolved);
+        }
+        break;
+      }
+    }
+  }
+
+  private handleTurnEnd(nodeId: string, finalText: string): void {
+    const node = this.nodes.get(nodeId)!;
+    const taskState = this.taskStateOf(node.spec.taskId);
+    if (taskState !== 'working' || !finalText.trim()) return;
+    // WHY the pending guard: queued messages (e.g. crew DELIVERs that raced in
+    // during this very turn) mean another turn is coming — this turn's text is
+    // narration, not the deliverable. Without it, fast crew make the captain's
+    // "awaiting crew" auto-deliver as the mission result.
+    if (node.hasPending) return;
+    const openChild = [...this.nodes.values()].some(n =>
+      n.spec.parentId === nodeId && ['submitted', 'working', 'input-required'].includes(this.taskStateOf(n.spec.taskId)));
+    if (openChild) return;
+    // Auto-deliver fallback: the model ended its turn without calling deliver.
+    this.route({ kind: 'DELIVER', from: nodeId, to: node.spec.parentId, taskId: node.spec.taskId, text: finalText, auto: true });
+  }
+
+  private handleModelFailure(nodeId: string, error: string): void {
+    const node = this.nodes.get(nodeId)!;
+    this.log.append('task.state', { taskId: node.spec.taskId, state: 'failed' });
+    this.route({ kind: 'ESCALATE', from: nodeId, to: node.spec.parentId, taskId: node.spec.taskId, text: `node failed after retry: ${error}` });
+  }
+}

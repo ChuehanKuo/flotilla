@@ -28,6 +28,8 @@ export class AgentNode {
 
   get busy(): boolean { return this.running; }
 
+  get hasPending(): boolean { return this.pending.length > 0; }
+
   enqueue(msg: FleetMessage): void {
     this.pending.push(msg);
     if (!this.running) void this.runLoop();
