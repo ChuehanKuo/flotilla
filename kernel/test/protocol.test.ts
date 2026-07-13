@@ -124,6 +124,17 @@ describe('executeCommands', () => {
     expect(delegateExec).toHaveBeenCalledWith({ role: 'scan', charter: 'Scan.', task: 'scan it', driver: 'codex' }, opts);
   });
 
+  it('tolerates a hallucinated delegate driver: drops it to undefined, still spawns', async () => {
+    // Live bug: CLI captains put role names ("literature-reviewer") in `driver`,
+    // which fails the enum and rejected the whole delegate → crew never spawned.
+    const delegateExec = vi.fn(async () => 'spawned crew-1 (task t2)');
+    const tools = fakeTools({ delegate: delegateExec });
+    const commands = [{ cmd: 'delegate', role: 'scan', charter: 'Scan.', task: 'scan it', driver: 'literature-reviewer' }] as unknown as Command[];
+    const results = await executeCommands(commands, tools);
+    expect(results).toEqual(['delegate → spawned crew-1 (task t2)']);
+    expect(delegateExec).toHaveBeenCalledWith({ role: 'scan', charter: 'Scan.', task: 'scan it', driver: undefined }, opts);
+  });
+
   it('covers all five command kinds mapping to their like-named tools', async () => {
     const report = vi.fn(async (a: any) => `reported: ${a.text}`);
     const deliver = vi.fn(async (a: any) => `delivered: ${a.text}`);

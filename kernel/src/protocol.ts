@@ -46,7 +46,13 @@ export function parseCommands(text: string): { commands: Command[]; cleanText: s
 // arriving from an untrusted CLI transcript must be checked before they reach the
 // kernel's coordination tools.
 const COMMAND_SCHEMAS = {
-  delegate: z.object({ role: z.string(), charter: z.string(), task: z.string(), driver: z.enum(['api', 'claude-code', 'codex']).optional() }),
+  // WHY .catch(undefined) on driver: CLI captains hallucinate this field with role
+  // names ("literature-reviewer") instead of the runtime enum; without the catch, one
+  // bad value fails the WHOLE delegate at validation and the crew never spawns (a live
+  // bug). An unrecognized driver now silently falls back to the mission's default crew
+  // assignment rather than sinking the delegation. It's also dropped from the
+  // model-facing PROTOCOL_INSTRUCTIONS so the model stops trying to set it.
+  delegate: z.object({ role: z.string(), charter: z.string(), task: z.string(), driver: z.enum(['api', 'claude-code', 'codex']).optional().catch(undefined) }),
   report: z.object({ text: z.string() }),
   deliver: z.object({ text: z.string() }),
   escalate: z.object({ question: z.string() }),
@@ -138,7 +144,7 @@ and you must never place a raw \`\`\` at the start of a line inside the JSON (es
 newlines in string values as \\n, so this cannot happen in valid JSON).
 
 Each entry in "commands" has a "cmd" field plus its arguments:
-  - {"cmd": "delegate", "role": "...", "charter": "...", "task": "...", "driver": "..."} (driver optional; captain only)
+  - {"cmd": "delegate", "role": "short-role-name", "charter": "the crew agent's full instructions", "task": "the concrete task"} (captain only; the fleet assigns the crew's runtime for you — do not add a "driver" field)
   - {"cmd": "report", "text": "..."} (interim progress, does not end your task; crew only)
   - {"cmd": "deliver", "text": "..."} (your complete result; ends your task)
   - {"cmd": "escalate", "question": "..."} (pauses your task until answered)
