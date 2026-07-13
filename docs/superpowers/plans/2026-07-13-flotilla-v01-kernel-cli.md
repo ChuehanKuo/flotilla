@@ -1666,6 +1666,36 @@ describe('rails', () => {
     await p;
     vi.useRealTimers();
   });
+
+  it('a refused delegate leaves a tool.called audit event', async () => {
+    const cfg = { ...defaultConfig(), maxChildren: 0 };
+    const captain = scriptedModel([
+      { toolName: 'delegate', input: { role: 'a', charter: 'c', task: 't' } },
+      { text: 'FINAL: no crew' },
+    ]);
+    const mission = new Mission('x', cfg, { modelFactory: () => captain });
+    const res = await mission.start();
+    expect(res.status).toBe('completed');
+    const audit = mission.log.events.filter(e => e.type === 'tool.called');
+    expect(audit).toHaveLength(1);
+    expect((audit[0].data as any).outcome).toBe('refused: max children reached');
+  });
+
+  it('ANSWER to an unknown or non-escalated task is ignored', async () => {
+    const captain = scriptedModel([
+      { toolName: 'escalate', input: { question: 'which scope?' } },
+      { text: 'awaiting' },
+      { text: 'FINAL: scoped' },
+    ]);
+    const mission = new Mission('x', defaultConfig(), { modelFactory: () => captain });
+    mission.onOperatorEscalation(e => {
+      mission.answerEscalation('t-phantom', 'lost');   // guard must drop this
+      setTimeout(() => mission.answerEscalation(e.taskId, 'real answer'), 10);
+    });
+    const res = await mission.start();
+    expect(res.status).toBe('completed');
+    expect(mission.state().tasks['t-phantom']).toBeUndefined();
+  });
 });
 ```
 
@@ -1742,6 +1772,30 @@ if (this.timers.timeout) clearTimeout(this.timers.timeout);
   }
 ```
 (No behavior change for existing tests: `runLoop` still converts model/gate errors internally; the fence only catches hook throws.)
+8. Guard the ANSWER route (Task 9 review): replace the `case 'ANSWER':` body in `route()` with:
+```ts
+      case 'ANSWER':
+        // Only an input-required task can be answered; stale answers to closed
+        // tasks and answers to unknown taskIds stay logged (message event above)
+        // but are not acted on — this also keeps phantom tasks out of the state.
+        if (this.taskStateOf(resolved.taskId) !== 'input-required') break;
+        this.log.append('task.state', { taskId: resolved.taskId, state: 'working' });
+        this.nodes.get(resolved.to)?.enqueue(resolved);
+        break;
+```
+9. Fence the operator escalation callback everywhere it fires (route ESCALATE case + checkWatchdog):
+```ts
+        try { this.escalationCb?.({ taskId: resolved.taskId, from: resolved.from, text: resolved.text }); }
+        catch { /* operator callback errors must not poison kernel routing */ }
+```
+10. Audit-log delegate outcomes: rename the existing `delegate()` body to `private tryDelegate(...)` (same signature) and add:
+```ts
+  private delegate(fromNodeId: string, args: { role: string; charter: string; task: string; provider?: Provider; model?: string }): string {
+    const outcome = this.tryDelegate(fromNodeId, args);
+    this.log.append('tool.called', { nodeId: fromNodeId, tool: 'delegate', role: args.role, outcome });
+    return outcome;
+  }
+```
 
 - [ ] **Step 4: Run the full suite**
 
