@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "workspaces": ["kernel", "cli"],
+  "engines": { "node": ">=20" },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -b kernel cli"
