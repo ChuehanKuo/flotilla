@@ -1,6 +1,6 @@
 # Flotilla — Design Spec
 
-**Status:** Design approved 2026-07-13. Build **gated** — implementation starts only after the 2026-07-29 subtraction slot executes or Arthur explicitly greenlights (path ① of the governance decision below).
+**Status:** Design approved 2026-07-13. Build **greenlit** 2026-07-13 by explicit operator order ("no gate, go"), overriding path ①'s wait — the conflict analysis in §7 stands as record.
 **Author:** Arthur C. Kuo, with Claude (design synthesis from 4-agent research fan-out, 2026-07-13).
 
 ---
