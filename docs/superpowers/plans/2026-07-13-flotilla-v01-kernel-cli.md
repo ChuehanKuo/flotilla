@@ -563,9 +563,16 @@ describe('BudgetTracker', () => {
     expect(b.nodeUsd('n1')).toBeCloseTo(4.5);
   });
 
-  it('unknown model costs 0 but does not throw', () => {
+  it('unknown model is priced at the most expensive configured rate (never under-counts)', () => {
     const b = new BudgetTracker(pricing, 5);
-    expect(b.addUsage('n1', 'mystery', { inputTokens: 1000, outputTokens: 1000 })).toBe(0);
+    const cost = b.addUsage('n1', 'mystery', { inputTokens: 1_000_000, outputTokens: 100_000 });
+    expect(cost).toBeCloseTo(4.5); // priced as m1 — the only, hence max, configured rate
+  });
+
+  it('assertUnderCap throws at exact cap equality', () => {
+    const b = new BudgetTracker({ m1: { inputPerMTok: 1, outputPerMTok: 1 } }, 1);
+    b.addUsage('n1', 'm1', { inputTokens: 1_000_000, outputTokens: 0 }); // exactly $1.00
+    expect(() => b.assertUnderCap()).toThrow(BudgetExceededError);
   });
 
   it('assertUnderCap throws once the cap is reached', () => {
@@ -601,7 +608,11 @@ export class BudgetTracker {
   constructor(private pricing: MissionConfig['pricing'], private missionCapUsd: number) {}
 
   addUsage(nodeId: string, model: string, usage: { inputTokens: number; outputTokens: number }): number {
-    const p = this.pricing[model];
+    // WHY the fallback: an unrecognized model id must never silently count $0
+    // toward the hard cap — price it at the most expensive configured rate instead.
+    const rates = Object.values(this.pricing);
+    const p = this.pricing[model]
+      ?? (rates.length ? rates.reduce((a, b) => (a.inputPerMTok + a.outputPerMTok >= b.inputPerMTok + b.outputPerMTok ? a : b)) : undefined);
     const cost = p ? (usage.inputTokens / 1e6) * p.inputPerMTok + (usage.outputTokens / 1e6) * p.outputPerMTok : 0;
     this.total += cost;
     this.perNode.set(nodeId, (this.perNode.get(nodeId) ?? 0) + cost);
