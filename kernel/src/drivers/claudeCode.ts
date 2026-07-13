@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { TurnDriver, TurnInput, TurnOutput } from '../driver.js';
-import { formatTurnPrompt, runTurnProtocol, PROTOCOL_INSTRUCTIONS } from '../protocol.js';
+import { formatTurnPrompt, parseCommands, executeCommands, PROTOCOL_INSTRUCTIONS } from '../protocol.js';
 
 const execFile = promisify(execFileCb);
 
@@ -11,9 +11,18 @@ export interface ClaudeCodeDriverOptions {
   timeoutMs?: number;
 }
 
-interface ClaudeCliReply {
-  result?: unknown;
+// WHY only `type`/`message.content[].type|text`/`session_id`/`result`/`usage`
+// fields: `claude -p --output-format stream-json --verbose` emits one JSON
+// object per line — shape verified against the installed CLI (2.1.207) via a
+// non-mutating probe (`-p "..." --output-format stream-json --verbose
+// --allowedTools ''`). Real streams also carry `system` (init/hook) and
+// `rate_limit_event` lines and `thinking`/`tool_use` content blocks — all
+// silently ignored by the narrow shape below rather than enumerated.
+interface StreamEvent {
+  type?: unknown;
+  message?: { content?: unknown };
   session_id?: unknown;
+  result?: unknown;
   usage?: { input_tokens?: unknown; output_tokens?: unknown };
 }
 
@@ -46,24 +55,32 @@ export class ClaudeCodeDriver implements TurnDriver {
       maxBuffer: 10 * 2 ** 20,
     });
 
-    // WHY no try/catch here: unparseable stdout must throw so the node's
-    // retry-then-escalate machinery handles it — never swallow it into a
-    // silently-empty turn.
-    const reply = JSON.parse(stdout) as ClaudeCliReply;
+    // WHY no try/catch here: an unparseable stream, or one with no result event
+    // and no assistant text at all, must throw so the node's retry-then-
+    // escalate machinery handles it — never swallow it into a silently-empty
+    // turn. parseStdout itself throws for both cases.
+    const { fullTranscript, resultText, sessionId, usage } = this.parseStdout(stdout);
 
-    // The turn succeeded — only now drain the queue. A thrown execFile/JSON.parse
+    // The turn succeeded — only now drain the queue. A thrown execFile/parseStdout
     // above leaves it intact, so the node's retry of the same newText rebuilds
     // the prompt with the same [command results] block instead of losing it.
     this.pendingCommandResults = [];
 
-    if (typeof reply.session_id === 'string') this.sessionId = reply.session_id;
-    const resultText = typeof reply.result === 'string' ? reply.result : '';
-    const usage = reply.usage ?? {};
+    if (sessionId) this.sessionId = sessionId;
     const inputTokens = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0;
     const outputTokens = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0;
 
-    const { text, pendingCommandResults } = await runTurnProtocol(resultText, input.tools);
-    this.pendingCommandResults = pendingCommandResults;
+    // WHY commands come from fullTranscript but display text from resultText:
+    // headless Claude runs its own internal multi-turn loop and can emit its
+    // flotilla block in an intermediate turn, then narrate in its final turn
+    // (the `result` event's text) without repeating the block — scanning only
+    // `result` misses the block (the P7 bug). Scanning the whole transcript
+    // catches it wherever it appeared (parseCommands keeps only the LAST
+    // block found). Display text stays the clean final-turn summary, not the
+    // full multi-turn reasoning dump.
+    const { commands } = parseCommands(fullTranscript);
+    this.pendingCommandResults = await executeCommands(commands, input.tools);
+    const text = resultText !== undefined ? parseCommands(resultText).cleanText : parseCommands(fullTranscript).cleanText;
 
     return {
       text,
@@ -71,6 +88,74 @@ export class ClaudeCodeDriver implements TurnDriver {
       usage: { inputTokens, outputTokens },
       billing: 'subscription',
     };
+  }
+
+  // WHY line-by-line with per-line try/catch: stream-json prints NDJSON, one
+  // event object per line — a single JSON.parse(stdout) would fail on the
+  // very first reply. Unparseable individual lines are skipped rather than
+  // failing the whole turn (log noise, partial writes) — mirrors CodexDriver's
+  // parseStdout (kernel/src/drivers/codex.ts).
+  private parseStdout(stdout: string): {
+    fullTranscript: string;
+    resultText: string | undefined;
+    sessionId: string | undefined;
+    usage: { input_tokens?: unknown; output_tokens?: unknown };
+  } {
+    const turnTexts: string[] = [];
+    let resultEvent: StreamEvent | undefined;
+    let lastAssistantSessionId: string | undefined;
+
+    for (const line of stdout.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue; // skip unparseable lines
+      }
+      if (!parsed || typeof parsed !== 'object') continue;
+      const event = parsed as StreamEvent;
+
+      if (event.type === 'assistant') {
+        const content = event.message?.content;
+        if (Array.isArray(content)) {
+          const parts: string[] = [];
+          for (const block of content) {
+            if (block && typeof block === 'object' && (block as { type?: unknown }).type === 'text') {
+              const blockText = (block as { text?: unknown }).text;
+              if (typeof blockText === 'string') parts.push(blockText);
+            }
+          }
+          if (parts.length > 0) turnTexts.push(parts.join(''));
+        }
+        if (typeof event.session_id === 'string') lastAssistantSessionId = event.session_id;
+      } else if (event.type === 'result') {
+        resultEvent = event;
+      }
+    }
+
+    // WHY join with '\n': FENCE_RE (protocol.ts) requires a flotilla block's
+    // opening fence to start at a line boundary. Assistant turn texts aren't
+    // guaranteed to end with a trailing newline, so concatenating turns with
+    // '' could glue one turn's tail directly onto the next turn's leading
+    // ```flotilla and hide a genuine block from the regex.
+    const fullTranscript = turnTexts.join('\n');
+    const resultText = resultEvent && typeof resultEvent.result === 'string' ? resultEvent.result : undefined;
+
+    // Zero parseable lines from non-empty garbage stdout, or valid NDJSON that
+    // never carried a result event or any assistant text (e.g. only system/
+    // rate_limit_event lines) — both leave nothing for the node to act on.
+    if (fullTranscript === '' && resultText === undefined) {
+      throw new Error('claude produced no result event and no assistant text');
+    }
+
+    const sessionId =
+      (resultEvent && typeof resultEvent.session_id === 'string' ? resultEvent.session_id : undefined) ??
+      lastAssistantSessionId;
+    const usage = resultEvent?.usage ?? {};
+
+    return { fullTranscript, resultText, sessionId, usage };
   }
 
   private buildArgs(promptText: string, system: string): string[] {
@@ -85,6 +170,12 @@ export class ClaudeCodeDriver implements TurnDriver {
     // gitignore-style relative globs, e.g. "Edit(docs/**)"); since cwd is
     // already workspaceDir (see execFile's `cwd` below), `**` scopes every
     // Read/Write/Edit to inside it. Glob/Grep stay unscoped (read-only search).
-    return ['-p', promptText, '--output-format', 'json', ...auth, '--allowedTools', 'Read(**),Write(**),Edit(**),Glob,Grep'];
+    return [
+      '-p', promptText,
+      '--output-format', 'stream-json',
+      '--verbose',
+      ...auth,
+      '--allowedTools', 'Read(**),Write(**),Edit(**),Glob,Grep',
+    ];
   }
 }

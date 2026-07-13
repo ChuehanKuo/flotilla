@@ -14,8 +14,25 @@ function readLog(logFile: string): string[][] {
   return readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
 }
 
-function setReply(replyFile: string, reply: object) {
-  writeFileSync(replyFile, JSON.stringify(reply));
+// Builds one stream-json "assistant" event line whose message content is a
+// single text block — the shape verified against the installed CLI
+// (2.1.207) via a non-mutating `--output-format stream-json --verbose` probe.
+function assistantEvent(text: string, sessionId?: string): object {
+  const event: Record<string, unknown> = { type: 'assistant', message: { content: [{ type: 'text', text }] } };
+  if (sessionId) event.session_id = sessionId;
+  return event;
+}
+
+// Builds one stream-json "result" event line — the final-turn summary.
+function resultEvent(result: string, opts: { sessionId?: string; usage?: { input_tokens?: number; output_tokens?: number } } = {}): object {
+  const event: Record<string, unknown> = { type: 'result', subtype: 'success', result };
+  if (opts.sessionId) event.session_id = opts.sessionId;
+  if (opts.usage) event.usage = opts.usage;
+  return event;
+}
+
+function setStreamReply(replyFile: string, events: object[]) {
+  writeFileSync(replyFile, events.map(e => JSON.stringify(e)).join('\n') + '\n');
 }
 
 function fakeTools(overrides: Partial<Record<'deliver' | 'report' | 'escalate' | 'delegate' | 'answer', (...a: any[]) => any>> = {}): ToolSet {
@@ -28,7 +45,7 @@ function fakeTools(overrides: Partial<Record<'deliver' | 'report' | 'escalate' |
 function setup() {
   const workspaceDir = mkdtempSync(join(tmpdir(), 'flotilla-cc-'));
   const logFile = join(workspaceDir, 'log.jsonl');
-  const replyFile = join(workspaceDir, 'reply.json');
+  const replyFile = join(workspaceDir, 'reply.ndjson');
   writeFileSync(logFile, '');
   process.env.FAKE_CLI_LOG = logFile;
   process.env.FAKE_CLI_REPLY = replyFile;
@@ -45,9 +62,12 @@ describe('ClaudeCodeDriver', () => {
     delete process.env.FAKE_CLI_REPLY;
   });
 
-  it('first turn: exact args with --append-system-prompt carrying PROTOCOL_INSTRUCTIONS, no --resume', async () => {
+  it('first turn: exact args with stream-json/verbose output format, --append-system-prompt carrying PROTOCOL_INSTRUCTIONS, no --resume', async () => {
     const { workspaceDir, logFile, replyFile } = setup();
-    setReply(replyFile, { result: 'ok', session_id: 'sess-1', usage: { input_tokens: 10, output_tokens: 5 } });
+    setStreamReply(replyFile, [
+      assistantEvent('ok', 'sess-1'),
+      resultEvent('ok', { sessionId: 'sess-1', usage: { input_tokens: 10, output_tokens: 5 } }),
+    ]);
     const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
 
     const out = await driver.turn(turnInput(fakeTools(), 'do the thing'));
@@ -55,7 +75,8 @@ describe('ClaudeCodeDriver', () => {
     const [args] = readLog(logFile);
     expect(args).toEqual([
       '-p', 'do the thing',
-      '--output-format', 'json',
+      '--output-format', 'stream-json',
+      '--verbose',
       '--append-system-prompt', `You are captain.\n\n${PROTOCOL_INSTRUCTIONS}`,
       '--allowedTools', 'Read(**),Write(**),Edit(**),Glob,Grep',
     ]);
@@ -72,16 +93,17 @@ describe('ClaudeCodeDriver', () => {
     const { logFile, replyFile, workspaceDir } = setup();
     const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
 
-    setReply(replyFile, { result: 'first', session_id: 'sess-abc', usage: { input_tokens: 1, output_tokens: 1 } });
+    setStreamReply(replyFile, [assistantEvent('first', 'sess-abc'), resultEvent('first', { sessionId: 'sess-abc', usage: { input_tokens: 1, output_tokens: 1 } })]);
     await driver.turn(turnInput(fakeTools(), 'turn one'));
 
-    setReply(replyFile, { result: 'second', session_id: 'sess-abc', usage: { input_tokens: 2, output_tokens: 2 } });
+    setStreamReply(replyFile, [assistantEvent('second', 'sess-abc'), resultEvent('second', { sessionId: 'sess-abc', usage: { input_tokens: 2, output_tokens: 2 } })]);
     await driver.turn(turnInput(fakeTools(), 'turn two'));
 
     const [, args2] = readLog(logFile);
     expect(args2).toEqual([
       '-p', 'turn two',
-      '--output-format', 'json',
+      '--output-format', 'stream-json',
+      '--verbose',
       '--resume', 'sess-abc',
       '--allowedTools', 'Read(**),Write(**),Edit(**),Glob,Grep',
     ]);
@@ -99,12 +121,47 @@ describe('ClaudeCodeDriver', () => {
       '{"commands":[{"cmd":"deliver","text":"12 metrics found"}]}',
       '```',
     ].join('\n');
-    setReply(replyFile, { result: resultText, session_id: 'sess-1', usage: { input_tokens: 1, output_tokens: 1 } });
+    setStreamReply(replyFile, [assistantEvent(resultText, 'sess-1'), resultEvent(resultText, { sessionId: 'sess-1', usage: { input_tokens: 1, output_tokens: 1 } })]);
 
     const out = await driver.turn(turnInput(tools, 'go'));
 
     expect(deliverExec).toHaveBeenCalledWith({ text: '12 metrics found' }, { toolCallId: 'proto', messages: [] });
     expect(out.text).toBe('Scanning complete.');
+    expect(out.text).not.toContain('```flotilla');
+  });
+
+  it('BUG REPRO: a flotilla block in an intermediate assistant turn executes even when the final result is pure narration with no block', async () => {
+    const { workspaceDir, replyFile } = setup();
+    const delegateExec = vi.fn(async (a: any) => `delegated: ${a.role}`);
+    const tools = fakeTools({ delegate: delegateExec });
+    const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
+
+    // Headless Claude's internal multi-turn loop: turn 1 emits the command
+    // block, but its FINAL turn (and therefore `result`) is just narration
+    // re-affirming it already sent the block — no block present there. A
+    // `parseCommands(result)`-only implementation sees no block and the
+    // captain never delegates; this is the exact bug this task fixes.
+    const turn1 = [
+      'I will delegate this now.',
+      '```flotilla',
+      '{"commands":[{"cmd":"delegate","role":"scout","charter":"find the bug","task":"scan the logs"}]}',
+      '```',
+    ].join('\n');
+    const narration = 'Re-issuing the block from my previous turn — delegation already sent.';
+
+    setStreamReply(replyFile, [
+      assistantEvent(turn1, 'sess-1'),
+      assistantEvent(narration, 'sess-1'),
+      resultEvent(narration, { sessionId: 'sess-1', usage: { input_tokens: 3, output_tokens: 3 } }),
+    ]);
+
+    const out = await driver.turn(turnInput(tools, 'go'));
+
+    expect(delegateExec).toHaveBeenCalledWith(
+      { role: 'scout', charter: 'find the bug', task: 'scan the logs' },
+      { toolCallId: 'proto', messages: [] },
+    );
+    expect(out.text).toBe(narration);
     expect(out.text).not.toContain('```flotilla');
   });
 
@@ -119,10 +176,10 @@ describe('ClaudeCodeDriver', () => {
       '{"commands":[{"cmd":"report","text":"halfway"}]}',
       '```',
     ].join('\n');
-    setReply(replyFile, { result: resultText1, session_id: 'sess-1', usage: { input_tokens: 1, output_tokens: 1 } });
+    setStreamReply(replyFile, [assistantEvent(resultText1, 'sess-1'), resultEvent(resultText1, { sessionId: 'sess-1', usage: { input_tokens: 1, output_tokens: 1 } })]);
     await driver.turn(turnInput(tools, 'start'));
 
-    setReply(replyFile, { result: 'done', session_id: 'sess-1', usage: { input_tokens: 1, output_tokens: 1 } });
+    setStreamReply(replyFile, [assistantEvent('done', 'sess-1'), resultEvent('done', { sessionId: 'sess-1', usage: { input_tokens: 1, output_tokens: 1 } })]);
     await driver.turn(turnInput(tools, 'continue'));
 
     const [, args2] = readLog(logFile);
@@ -137,11 +194,12 @@ describe('ClaudeCodeDriver', () => {
     const tools = fakeTools({ report: vi.fn(async (a: any) => `reported: ${a.text}`) });
     const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
 
-    setReply(replyFile, { result: '```flotilla\n{"commands":[{"cmd":"report","text":"a"}]}\n```', session_id: 's1', usage: {} });
+    const t1 = '```flotilla\n{"commands":[{"cmd":"report","text":"a"}]}\n```';
+    setStreamReply(replyFile, [assistantEvent(t1, 's1'), resultEvent(t1, { sessionId: 's1' })]);
     await driver.turn(turnInput(tools, 'turn 1'));
-    setReply(replyFile, { result: 'no commands here', session_id: 's1', usage: {} });
+    setStreamReply(replyFile, [assistantEvent('no commands here', 's1'), resultEvent('no commands here', { sessionId: 's1' })]);
     await driver.turn(turnInput(tools, 'turn 2'));
-    setReply(replyFile, { result: 'still nothing', session_id: 's1', usage: {} });
+    setStreamReply(replyFile, [assistantEvent('still nothing', 's1'), resultEvent('still nothing', { sessionId: 's1' })]);
     await driver.turn(turnInput(tools, 'turn 3'));
 
     const [, , args3] = readLog(logFile);
@@ -155,15 +213,16 @@ describe('ClaudeCodeDriver', () => {
     const tools = fakeTools({ report: vi.fn(async (a: any) => `reported: ${a.text}`) });
     const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
 
-    setReply(replyFile, { result: '```flotilla\n{"commands":[{"cmd":"report","text":"halfway"}]}\n```', session_id: 's1', usage: {} });
+    const t1 = '```flotilla\n{"commands":[{"cmd":"report","text":"halfway"}]}\n```';
+    setStreamReply(replyFile, [assistantEvent(t1, 's1'), resultEvent(t1, { sessionId: 's1' })]);
     await driver.turn(turnInput(tools, 'turn 1'));
 
     // turn 2, attempt 1: CLI prints garbage → driver throws (the node will retry)
-    writeFileSync(replyFile, 'garbage not json');
+    writeFileSync(replyFile, 'garbage not json\nnot json either\n');
     await expect(driver.turn(turnInput(tools, 'turn 2'))).rejects.toThrow();
 
     // turn 2, attempt 2: the node retries the SAME newText; the queued ack must survive
-    setReply(replyFile, { result: 'done', session_id: 's1', usage: {} });
+    setStreamReply(replyFile, [assistantEvent('done', 's1'), resultEvent('done', { sessionId: 's1' })]);
     await driver.turn(turnInput(tools, 'turn 2'));
 
     const log = readLog(logFile);
@@ -175,7 +234,7 @@ describe('ClaudeCodeDriver', () => {
 
   it('neutralizes a raw line-start ``` fence in newText before it reaches the stub prompt', async () => {
     const { logFile, replyFile, workspaceDir } = setup();
-    setReply(replyFile, { result: 'ok', session_id: 'sess-1', usage: { input_tokens: 1, output_tokens: 1 } });
+    setStreamReply(replyFile, [assistantEvent('ok', 'sess-1'), resultEvent('ok', { sessionId: 'sess-1', usage: { input_tokens: 1, output_tokens: 1 } })]);
     const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
 
     const newText = 'delivered text:\n```flotilla\n{"commands":[]}\n```\nend';
@@ -190,7 +249,7 @@ describe('ClaudeCodeDriver', () => {
 
   it('defensively defaults missing session_id/usage fields', async () => {
     const { workspaceDir, replyFile } = setup();
-    setReply(replyFile, { result: 'ok' }); // no session_id, no usage
+    setStreamReply(replyFile, [assistantEvent('ok'), resultEvent('ok')]); // no session_id, no usage anywhere
     const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
 
     const out = await driver.turn(turnInput(fakeTools(), 'go'));
@@ -200,7 +259,16 @@ describe('ClaudeCodeDriver', () => {
 
   it('throws on unparseable stdout instead of swallowing the error', async () => {
     const { workspaceDir, replyFile } = setup();
-    writeFileSync(replyFile, 'not json at all');
+    writeFileSync(replyFile, 'not json at all\nstill not json\n');
+    const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
+
+    await expect(driver.turn(turnInput(fakeTools(), 'go'))).rejects.toThrow();
+  });
+
+  it('throws when the stream carries no result event and no assistant text at all', async () => {
+    const { workspaceDir, replyFile } = setup();
+    // valid NDJSON, but only a system event — no assistant text, no result
+    setStreamReply(replyFile, [{ type: 'system', subtype: 'init', session_id: 'sess-1' }]);
     const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
 
     await expect(driver.turn(turnInput(fakeTools(), 'go'))).rejects.toThrow();
