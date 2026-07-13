@@ -1,0 +1,15 @@
+{
+  "name": "flotilla",
+  "private": true,
+  "type": "module",
+  "workspaces": ["kernel", "cli"],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -b kernel cli"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0",
+    "tsx": "^4.19.0"
+  }
+}
