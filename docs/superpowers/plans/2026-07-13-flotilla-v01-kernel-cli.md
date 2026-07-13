@@ -2287,6 +2287,13 @@ git commit -m "docs: quickstart; verify live demo mission on two providers"
 
 Steps: update types → driver.ts + failing-compile sweep → run full suite → all 35 must pass again → commit `refactor(kernel): TurnDriver seam; subscription-first default config`.
 
+**P1 post-review addendum (fix lands with P2 as its own commit):** `node.spawned` must carry the runtime identity for CLI-driver nodes. Exact changes: (1) `kernel.ts` `spawn()` logs `driver: ref.driver` alongside the now-optional provider/model; (2) `reducer.ts` `NodeView` widens to `provider?: string; model?: string` and gains `driver?: string` (populated from the event); (3) `render.ts` node.spawned line becomes
+```ts
+const runtime = d.provider ? `${d.provider}/${d.model}` : String(d.driver ?? 'unknown');
+return `${clock(e.ts)} ${pc.green('+')} ${pc.bold(d.nodeId)} spawned (${runtime})${from}`;
+```
+(4) render test gains: `expect(formatEvent(ev('node.spawned', { nodeId: 'crew-2', driver: 'codex' })))).toContain('crew-2 spawned (codex)')`; (5) kernel happy-path test adds `expect(refs.slice(1).map(r => r.model)).toEqual(['claude-sonnet-5', 'gpt-5.6-sol']);` to pin the apiDefaults lookup. Commit: `fix(kernel): spawn events carry driver identity; render CLI runtimes`.
+
 ### Task P2: JSON command protocol
 
 **Files:**
