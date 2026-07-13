@@ -1584,6 +1584,8 @@ git commit -m "feat(kernel): Mission orchestration — spawn, route, caps, compl
 **Interfaces:**
 - Consumes: Task 9's Mission.
 - Produces: enforced rails. `beforeModelCall` now calls `budget.assertUnderCap()`; a `BudgetExceededError` anywhere fails the mission (`mission.failed`, `reason: 'budget-exceeded'`). `start()` arms: watchdog interval (every 30s, any node whose task is `working` and whose `lastTs` in FleetState is older than `watchdogMs` triggers one `watchdog` event + auto-ESCALATE to operator, once per node) and a mission timeout (`missionTimeoutMs` → `cancel('mission timeout')`). `finish()` clears both timers (`clearInterval`/`clearTimeout`, plus `.unref()` on creation so the process can exit).
+- Documented failure/recovery semantics (v0.1, deliberate): a node whose model call fails twice has its task marked `failed` and an ESCALATE routed to its parent; the ESCALATE transition makes the task `input-required`, so an ANSWER re-wakes the node — that answer is the retry path, and the wake also drains any messages stranded in the node's inbox by the failed turn. A failed node that never receives an ANSWER stays idle; every message to it is already in the event log, so nothing is lost from the record.
+- Hardening: `AgentNode.enqueue`'s floating `runLoop()` promise gets a catch fence so a throwing kernel hook (`onUsage`/`onTurnEnd`) surfaces as a node failure instead of a process-level unhandledRejection.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1719,6 +1721,20 @@ private checkWatchdog(): void {
 if (this.timers.watchdog) clearInterval(this.timers.watchdog);
 if (this.timers.timeout) clearTimeout(this.timers.timeout);
 ```
+7. In `kernel/src/node.ts`, replace the body of `enqueue` with:
+```ts
+  enqueue(msg: FleetMessage): void {
+    this.pending.push(msg);
+    // WHY the catch fence: kernel hooks run inside this floating promise; a
+    // throwing hook must surface as a node failure, not an unhandledRejection.
+    if (!this.running) {
+      void this.runLoop().catch(err => {
+        try { this.deps.onModelFailure(this.spec.id, `node loop crashed: ${String(err)}`); } catch { /* never rethrow into the void */ }
+      });
+    }
+  }
+```
+(No behavior change for existing tests: `runLoop` still converts model/gate errors internally; the fence only catches hook throws.)
 
 - [ ] **Step 4: Run the full suite**
 
