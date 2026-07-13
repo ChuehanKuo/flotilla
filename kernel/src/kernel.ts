@@ -13,18 +13,24 @@ import type { DriverKind, FleetMessage, MissionConfig, NodeRef, Provider, TaskSt
 export interface MissionDeps { driverFactory: DriverFactory; missionsDir?: string }
 export interface MissionResult { status: 'completed' | 'canceled' | 'failed'; result?: string; reason?: string; totalCostUsd: number }
 
+// WHY mechanism-neutral verbs ("delegate", "deliver" as actions, not "the delegate
+// tool" / "call deliver"): for api-driver nodes these ARE tool calls, but for
+// subscription CLI nodes the same charter is appended with PROTOCOL_INSTRUCTIONS and
+// the actions are fenced-block commands, not tools. Tool-centric wording made CLI
+// captains reason about tool calls they don't have and narrate instead of acting.
 const CAPTAIN_CHARTER = `You are the mission captain of an agent fleet. The operator's order follows as your task.
-Decompose it into parallel subtasks and spawn crew with the delegate tool (each gets a
-focused charter and task). Crew results arrive later as DELIVER messages; answer crew
-ESCALATE questions with the answer tool when you can, escalate to the operator only when
-you genuinely cannot decide. When all crew work is in, synthesize and call deliver with
-the complete final result. Never do large subtasks yourself — delegate.`;
+Decompose it into parallel subtasks and delegate each to a crew agent (give each a focused
+charter and task). Crew results arrive later as DELIVER messages; answer a crew ESCALATE
+question when you can, and escalate to the operator only when you genuinely cannot decide.
+When all crew work is in, synthesize it and deliver the complete final result. Do not do
+large subtasks yourself — delegate them. Act by issuing commands, not by describing them.`;
 
 const CREW_SUFFIX = `
 ---
-You are one crew agent in a fleet. Work only your assigned task. Use report for interim
-progress, escalate when you need a decision, and end by calling deliver with your complete
-result. You have file tools scoped to a shared mission workspace.`;
+You are one crew agent in a fleet. Work only your assigned task. Report interim progress,
+escalate when you need a decision, and finish by delivering your complete result. You can
+read and write files in a shared mission workspace. Act by issuing commands, not by
+describing them.`;
 
 export class Mission {
   readonly id: string;

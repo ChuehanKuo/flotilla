@@ -118,17 +118,20 @@ export async function executeCommands(commands: Command[], tools: ToolSet): Prom
   return results;
 }
 
-export const PROTOCOL_INSTRUCTIONS = `To act, end your response with a single fenced code block labeled "flotilla" containing
-a JSON object of the shape {"commands": [...]}. Only the LAST such block in your response
-is read — everything else is your own reasoning and is ignored by the protocol parser.
+export const PROTOCOL_INSTRUCTIONS = `You have NO tools. The ONLY way to do anything — delegate, report, deliver, escalate,
+answer — is to WRITE a literal fenced code block labeled "flotilla" into your response
+text, containing a JSON object of the shape {"commands": [...]}.
 
-CRITICAL — how execution works: nothing you write DURING your session executes anything.
-Only your FINAL message is handed to the protocol parser, exactly once, after your whole
-session ends. A flotilla block in an earlier or intermediate message does NOTHING and is
-never "already dispatched" — if you intend commands this turn, the block MUST appear at
-the end of your FINAL message, every turn, even if you believe you already wrote one.
-The only proof a command executed is a [command results] acknowledgment at the start of
-a later turn; absent that, re-issue the block.
+READ THIS TWICE: describing an action does not perform it. Writing "I will delegate",
+"the delegations are formed and ready", or "dispatching now" accomplishes NOTHING. Only
+the literal characters of a \`\`\`flotilla ... \`\`\` block, actually present in your
+response, are executed. If your response contains no such block, you have done nothing
+and the mission stalls. Never say a command is "ready", "dispatched", or "re-issued" —
+either the block is in this response, or the action has not happened.
+
+So: whenever you decide to act, WRITE THE BLOCK NOW, in this response. Put your reasoning
+first if you like, then the block. Multiple blocks are fine — the LAST one is executed,
+so make your final block the complete set of commands you want run this turn.
 
 The opening \`\`\`flotilla and closing \`\`\` must each start and end on their own line,
 and you must never place a raw \`\`\` at the start of a line inside the JSON (escape
