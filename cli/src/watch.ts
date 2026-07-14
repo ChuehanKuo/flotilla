@@ -26,9 +26,13 @@ export async function watch(target: string, opts: { step?: boolean }): Promise<n
   const events = EventLog.load(file);
   const last = events[events.length - 1];
   if (!last || !TERMINAL_EVENT_TYPES.has(last.type)) {
+    // `!last` covers an empty or wholly-unreadable log (EventLog.load skips
+    // unparseable lines, so a corrupt file can load to zero events); a
+    // non-terminal last event means a still-in-progress mission.
     console.error(pc.yellow(
-      `mission at ${file} looks still in progress — live read-only attach isn't wired up yet ` +
-      `(v0.2 follow-up). Watch it live instead with 'flota run', or re-run 'watch' once it finishes.`
+      `mission at ${file} is still in progress, or the log is empty/unreadable — ` +
+      `live read-only attach isn't wired up yet (v0.2 follow-up). Watch it live ` +
+      `instead with 'flota run', or re-run 'watch' once it finishes.`
     ));
     return 1;
   }

@@ -48,6 +48,29 @@ describe('App', () => {
     await resultPromise;
   });
 
+  it('shows the captain row when rendered BEFORE start (real CLI order), without a turn ending', async () => {
+    // The real CLI mounts the App and THEN calls mission.start() in the same
+    // synchronous continuation — so mission.started/node.spawned/task.state/
+    // the first ORDER are all appended before App's log subscription (a
+    // useEffect) attaches. Without a post-subscribe repaint, the fleet view
+    // stays blank until the captain's first turn END fires a log event. This
+    // test renders first, starts second, and asserts the captain appears
+    // immediately — no turn is ever completed here (the ScriptedDriver's turn()
+    // never returns before we assert).
+    const mission = newMission([{ text: '' }]);
+    const { lastFrame, unmount } = render(<App mission={mission} />);
+    const resultPromise = mission.start();
+    await sleep(10);
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('captain');
+    expect(frame).toContain('claude-code');
+
+    unmount();
+    mission.cancel('test done');
+    await resultPromise;
+  });
+
   it('"i" + typed text + Enter calls mission.instruct with the typed text', async () => {
     const mission = newMission([{ text: '' }]);
     const resultPromise = mission.start();

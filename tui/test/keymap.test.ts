@@ -69,8 +69,8 @@ describe('keyToAction — instruct/answer mode', () => {
     expect(keyToAction(key({ name: 'escape' }), ui)).toEqual({ type: 'cancelInput' });
   });
 
-  it('Ctrl-C quits (guard) rather than killing while typing', () => {
-    expect(keyToAction(key({ name: 'c', ctrl: true }), ui)).toEqual({ type: 'quit' });
+  it('Ctrl-C cancels the compose buffer (not kill, not quit) while typing', () => {
+    expect(keyToAction(key({ name: 'c', ctrl: true }), ui)).toEqual({ type: 'cancelInput' });
   });
 });
 

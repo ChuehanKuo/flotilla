@@ -32,6 +32,17 @@ export function App({ mission }: AppProps) {
 
   useEffect(() => {
     const unsubscribe = mission.log.subscribe(() => tick());
+    // WHY tick() immediately after subscribing: this effect flushes AFTER the
+    // synchronous continuation that mounted the App — and the real CLI calls
+    // mission.start() in that same continuation, so mission.started,
+    // node.spawned(captain), the first task.state, and the first ORDER are all
+    // appended BEFORE this subscription attaches. Without a repaint here the
+    // fleet view stays blank until the captain's first turn END fires a log
+    // event (tens of seconds). Every render re-derives state from the full
+    // log, so one post-subscribe tick recovers every missed event. It also
+    // closes the hang where a mission that reached a terminal state before
+    // subscribe would never trip the exit effect below.
+    tick();
     // The TUI is the answer surface, not a blocking readline (unlike the CLI):
     // this only needs to force a re-render — the inbox itself is derived from
     // mission.state().openEscalations, which the log subscription above

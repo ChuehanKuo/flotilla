@@ -20,13 +20,18 @@ program.command('run <order>')
     const { mission, missionsDir } = built;
 
     const app = renderFleet(mission);
-    // WHY not `await mission.start()` before waitUntilExit: the TUI itself
-    // unmounts (App.tsx's terminal-state effect) once the mission leaves
-    // 'running', which only happens after the log event that settles this
-    // promise has already been appended — so resultPromise is guaranteed
-    // settled by the time waitUntilExit() resolves, in either race order.
     const resultPromise = mission.start();
     await app.waitUntilExit();
+
+    // The TUI can exit two ways: the mission reached a terminal state (App's
+    // exit effect fired — resultPromise is already settled), OR the operator
+    // quit while the mission was still running (`q`). In the latter case,
+    // closing mission control stops the fleet — otherwise `await resultPromise`
+    // would block on a mission with no input surface left (a pending escalation
+    // deadlocks; and since the kernel's timers are unref'd, the process could
+    // even exit mid-mission with nothing printed). Cancel first, THEN await —
+    // cancel() settles resultPromise, so the await always resolves.
+    if (mission.state().status === 'running') mission.cancel('operator closed TUI');
     const result = await resultPromise;
 
     if (result.status === 'completed') {

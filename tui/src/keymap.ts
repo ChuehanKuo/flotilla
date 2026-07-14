@@ -49,10 +49,11 @@ function isPrintable(seq: string): boolean {
 export function keyToAction(key: KeyInput, ui: UiState): Action {
   // Ctrl-C means different things depending on mode: in browse it kills the
   // mission outright (the operator is in control there); inside instruct/
-  // answer it's just a "get me out of here" quit guard, so a stray Ctrl-C
-  // while composing text can't accidentally kill a running mission.
+  // answer it cancels the compose buffer back to browse — so a stray Ctrl-C
+  // while composing text can't accidentally kill a running mission, and it
+  // matches the terminal-standard "Ctrl-C abandons the current line" reflex.
   if (key.ctrl && key.name === 'c') {
-    return ui.mode === 'browse' ? { type: 'kill' } : { type: 'quit' };
+    return ui.mode === 'browse' ? { type: 'kill' } : { type: 'cancelInput' };
   }
 
   if (ui.mode === 'browse') {
