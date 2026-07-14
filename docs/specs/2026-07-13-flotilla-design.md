@@ -37,8 +37,13 @@ Mental model: a fleet. **The operator (admiral)** issues orders → **AI captain
      Anthropic   OpenAI   Google    Ollama   (via Vercel AI SDK)
 ```
 
-### 3.1 Provider adapters
-Vercel AI SDK normalizes chat + tool-calling across vendors. ~20 lines per additional provider. This is the only reused layer; the coordination layer is owned.
+### 3.1 Turn drivers (amended 2026-07-14 — subscription pivot, operator decision)
+A node's turns are produced by a pluggable `TurnDriver`. Three kinds in v0.1:
+- **`api`** — Vercel AI SDK (`generateText`, native tool-calling) over API keys. The open-source default path; ~20 lines per additional provider.
+- **`claude-code`** — headless Claude Code (`claude -p`, `--resume` continuity) riding the operator's Claude subscription. Coordination commands travel as a fenced JSON block the driver parses (MCP bridging is the v0.2 upgrade); crew file access = the CLI's own tools cwd'd to the mission workspace.
+- **`codex`** — `codex exec` (resumable, workspace-write sandbox) riding the operator's OpenAI subscription; same JSON-command protocol.
+
+v0.1's default config and demo run on the subscription drivers ($0 marginal); the `api` driver stays fully supported and tested. The coordination layer is owned either way.
 
 ### 3.2 Kernel
 - **AgentNode** = charter (role prompt) + provider/model binding + tool set + inbox. Captain vs crew is not a type: a captain is any node holding the `delegate` tool. `delegate(role, charter, provider, model)` spawns a child node → hierarchy is recursive by construction; depth is a config cap, not an architectural limit.
@@ -81,12 +86,13 @@ Tauri 2 shell (system WebView, ~10MB; one codebase builds macOS/Windows/Linux) a
 | launchd gateway crash-looped silently for 32 days (~144k respawns) | **No daemon, ever.** Kernel exists only while a mission runs; missions carry wall-clock timeouts; nothing auto-respawns. The persistent app is a *viewer*, not autonomous infra. |
 | Unbounded agent recursion risk | Depth cap default 2 (hard max 3); max children per node; max concurrent nodes per mission. |
 | Retry loops | Retry budget = 1, then mandatory `ESCALATE`. |
-| Zero visibility while failing | Visibility is the product; watchdog: node silent > 5 min (config) → auto-`ESCALATE` to operator. |
-| Cost drift | Hard $ cap per mission (default $5) and per node — kernel **refuses** model calls past cap. Live ticker. Kill switch cancels all in-flight work, logged as `canceled`. |
+| Zero visibility while failing | Visibility is the product; watchdog: node silent > 10 min default (config; CLI-driver turns are slow) → auto-`ESCALATE` to operator, answerable. |
+| Cost drift | Hard $ cap per mission (default $5) and per node — kernel **refuses** model calls past cap (api-driver nodes; subscription turns log usage at $0). Live ticker. Kill switch cancels all in-flight work, logged as `canceled`. |
+| Subscription runaway (no $ signal) | Per-node turn cap (`maxTurnsPerNode`, default 20) — kernel refuses further turns, node escalates. Depth/watchdog/timeout rails apply unchanged. |
 
 ## 5. v0.1 vertical slice
 
-**In:** kernel; Anthropic + OpenAI adapters; 1 captain + N crew (depth-2 config); 4 message kinds; JSONL log + reducer; CLI (order entry, line-tail, inline replies); Flotilla.app (live chart, inspector, order console, escalation inbox, kill switch, cost ticker, minimal replay stepper); crew tools = sandboxed file I/O inside `missions/<id>/workspace/` only. Cross-platform code throughout; built and tested on macOS only in v0.1 (Windows/Linux builds are a CI task, not a design change). Demo mission: captain decomposes a literature scan across 3 crew on two providers and assembles a brief.
+**In:** kernel; turn drivers `api` (Anthropic + OpenAI via AI SDK), `claude-code`, and `codex` (subscription CLIs, JSON-command protocol, stub-binary tested); 1 captain + N crew (depth-2 config); 4 message kinds; JSONL log + reducer; CLI (order entry, line-tail, inline replies); Flotilla.app (live chart, inspector, order console, escalation inbox, kill switch, cost ticker, minimal replay stepper); crew file access sandboxed to `missions/<id>/workspace/` (kernel lexical guard for api nodes; CLI-native tools cwd'd to the workspace for subscription nodes — documented as weaker). Cross-platform code throughout; built and tested on macOS only in v0.1. Demo mission (amended 2026-07-14): runs on the operator's subscriptions — captain on `claude-code`, crew split across `claude-code` and `codex`; no API keys required.
 
 **Out (backlog):** Google/Ollama adapters; depth-3+ default; shell/network tools for crew; polished replay scrubbing; external A2A interop; browser-served observatory; Ink TUI full-screen mode; multi-mission concurrency in one kernel.
 

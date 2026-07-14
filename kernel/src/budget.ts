@@ -1,0 +1,37 @@
+import type { MissionConfig } from './types.js';
+
+export class BudgetExceededError extends Error {
+  constructor(public spentUsd: number, public capUsd: number) {
+    super(`budget exceeded: $${spentUsd.toFixed(2)} >= cap $${capUsd.toFixed(2)}`);
+    // WHY: the kernel identifies this error via String(err).includes(this.name)
+    // after it crosses the node retry boundary — the name is codebase-owned and
+    // cannot collide with provider error text the way the message could.
+    this.name = 'BudgetExceededError';
+  }
+}
+
+export class BudgetTracker {
+  private perNode = new Map<string, number>();
+  private total = 0;
+
+  constructor(private pricing: MissionConfig['pricing'], private missionCapUsd: number) {}
+
+  addUsage(nodeId: string, model: string, usage: { inputTokens: number; outputTokens: number }): number {
+    // WHY the fallback: an unrecognized model id must never silently count $0
+    // toward the hard cap — price it at the most expensive configured rate instead.
+    const rates = Object.values(this.pricing);
+    const p = this.pricing[model]
+      ?? (rates.length ? rates.reduce((a, b) => (a.inputPerMTok + a.outputPerMTok >= b.inputPerMTok + b.outputPerMTok ? a : b)) : undefined);
+    const cost = p ? (usage.inputTokens / 1e6) * p.inputPerMTok + (usage.outputTokens / 1e6) * p.outputPerMTok : 0;
+    this.total += cost;
+    this.perNode.set(nodeId, (this.perNode.get(nodeId) ?? 0) + cost);
+    return cost;
+  }
+
+  get totalUsd(): number { return this.total; }
+  nodeUsd(nodeId: string): number { return this.perNode.get(nodeId) ?? 0; }
+
+  assertUnderCap(): void {
+    if (this.total >= this.missionCapUsd) throw new BudgetExceededError(this.total, this.missionCapUsd);
+  }
+}
