@@ -2,9 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { Mission } from '../src/kernel.js';
-import { defaultConfig } from '../src/types.js';
 import { AiSdkDriver } from '../src/driver.js';
-import { scriptedModel } from './helpers.js';
+import { scriptedModel, apiConfig } from './helpers.js';
 
 describe('Mission happy path', () => {
   it('captain delegates to two crew, crew deliver, mission completes with synthesis', async () => {
@@ -20,12 +19,15 @@ describe('Mission happy path', () => {
       refs.push(ref);
       return new AiSdkDriver(scriptedModel([{ toolName: 'deliver', input: { text: `result for ${ref.provider}` } }, { text: '' }]));
     };
-    const mission = new Mission('survey fairness metrics', defaultConfig(), { driverFactory });
+    const mission = new Mission('survey fairness metrics', apiConfig(), { driverFactory });
     const res = await mission.start();
     expect(res.status).toBe('completed');
     expect(res.result).toBe('FINAL BRIEF: A+B synthesized');
-    // captain defaults to claude-code; both crew were delegated onto the api driver
-    expect(refs.map((r: any) => r.driver)).toEqual(['claude-code', 'api', 'api']);
+    // WHY apiConfig() not defaultConfig(): kernel-mechanics test, driven via a
+    // fake driverFactory + scriptedModel native tool calls (delegate/deliver) —
+    // that only works on the api driver post-M4 (claude-code/codex nodes get
+    // no AI-SDK tools; they act over MCP instead — see mcpMission.test.ts).
+    expect(refs.map((r: any) => r.driver)).toEqual(['api', 'api', 'api']);
     expect(refs.slice(1).map((r: any) => r.provider)).toEqual(['anthropic', 'openai']);
     expect(refs.slice(1).map((r: any) => r.model)).toEqual(['claude-sonnet-5', 'gpt-5.6-sol']);
     const s = mission.state();
@@ -40,7 +42,7 @@ describe('Mission happy path', () => {
       { text: 'awaiting operator' },
       { text: 'FINAL: scoped brief' },
     ]);
-    const mission = new Mission('do a thing', defaultConfig(), { driverFactory: () => new AiSdkDriver(captain) });
+    const mission = new Mission('do a thing', apiConfig(), { driverFactory: () => new AiSdkDriver(captain) });
     const escalations: any[] = [];
     mission.onOperatorEscalation(e => {
       escalations.push(e);
@@ -63,14 +65,14 @@ describe('Mission happy path', () => {
       refs.push(ref);
       return new AiSdkDriver(first ? ((first = false), captain) : scriptedModel([{ toolName: 'deliver', input: { text: 'r' } }, { text: '' }]));
     };
-    const mission = new Mission('x', defaultConfig(), { driverFactory });
+    const mission = new Mission('x', apiConfig(), { driverFactory });
     const res = await mission.start();
     expect(res.status).toBe('completed');
     expect(refs[1]).toEqual({ driver: 'api', provider: 'anthropic', model: 'claude-sonnet-5' });
   });
 
   it('delegate is refused beyond maxChildren', async () => {
-    const cfg = { ...defaultConfig(), maxChildren: 1 };
+    const cfg = { ...apiConfig(), maxChildren: 1 };
     const captain = scriptedModel([
       { toolName: 'delegate', input: { role: 'a', charter: 'c', task: 't' } },
       { toolName: 'delegate', input: { role: 'b', charter: 'c', task: 't' } },
@@ -107,7 +109,7 @@ describe('Mission happy path', () => {
             { toolName: 'deliver', input: { text: 'wrote it' } },
             { text: '' },
           ]));
-    const mission = new Mission('x', defaultConfig(), { driverFactory, missionsDir: relDir });
+    const mission = new Mission('x', apiConfig(), { driverFactory, missionsDir: relDir });
     try {
       const res = await mission.start();
       expect(res.status).toBe('completed');

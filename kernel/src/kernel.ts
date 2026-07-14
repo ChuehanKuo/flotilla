@@ -7,7 +7,8 @@ import { BudgetTracker, BudgetExceededError } from './budget.js';
 import { AgentNode } from './node.js';
 import { makeFileTools } from './tools/files.js';
 import { makeCoordinationTools, type KernelApi } from './tools/coordination.js';
-import type { DriverFactory } from './providers.js';
+import { FlotaMcpServer } from './mcp/server.js';
+import type { DriverFactory, DriverFactoryCtx } from './providers.js';
 import type { DriverKind, FleetMessage, MissionConfig, NodeRef, Provider, TaskState } from './types.js';
 
 export interface MissionDeps { driverFactory: DriverFactory; missionsDir?: string }
@@ -39,6 +40,13 @@ export class Mission {
   private counter = 0;
   private budget: BudgetTracker;
   private workspaceDir: string;
+  // WHY one server per mission (not per node, not a singleton): every
+  // claude-code/codex node in this mission registers with the SAME hosted
+  // server (spawn() below) and gets its own bearer token — a mission-scoped
+  // instance is the natural lifetime (start()s with the mission, stop()s with
+  // it) and keeps one mission's nodes from ever reaching another's.
+  private mcpServer?: FlotaMcpServer;
+  private mcpUrl?: string;
   private abort = new AbortController();
   private escalationCb?: (e: { taskId: string; from: string; text: string }) => void;
   private resolveResult!: (r: MissionResult) => void;
@@ -90,8 +98,14 @@ export class Mission {
 
   cancel(reason: string): void { this.finish({ status: 'canceled', reason, totalCostUsd: this.budget.totalUsd }, 'mission.canceled', { reason }); }
 
-  start(): Promise<MissionResult> {
+  async start(): Promise<MissionResult> {
     const promise = new Promise<MissionResult>(res => { this.resolveResult = res; });
+    // WHY awaited before the first spawn(): spawn() registers claude-code/
+    // codex nodes with this.mcpServer and needs this.mcpUrl to build their
+    // driver ctx — both must exist before the captain (the mission's first
+    // spawn, right below) can be constructed.
+    this.mcpServer = new FlotaMcpServer();
+    ({ url: this.mcpUrl } = await this.mcpServer.start());
     this.log.append('mission.started', { order: this.order, config: { budgetUsd: this.config.budgetUsd, maxDepth: this.config.maxDepth } });
     const captainId = this.spawn('operator', 1, true, 'captain', CAPTAIN_CHARTER, this.config.models.captain);
     this.route({ kind: 'ORDER', from: 'operator', to: captainId, taskId: this.nodes.get(captainId)!.spec.taskId, text: this.order });
@@ -108,6 +122,15 @@ export class Mission {
     if (this.timers.watchdog) clearInterval(this.timers.watchdog);
     if (this.timers.timeout) clearTimeout(this.timers.timeout);
     this.abort.abort();
+    // WHY fire-and-forget, not awaited: finish() runs synchronously from many
+    // contexts (a route() DELIVER-to-operator called from inside the MCP
+    // server's own tool handler mid-request, a setTimeout callback, a catch
+    // block) that don't await it today. httpServer.close() doesn't cut off
+    // the in-flight response that may have triggered this shutdown (Node
+    // keeps existing connections open until they finish on their own), so
+    // there's no correctness reason to block finish() on the socket actually
+    // closing — only a resource-cleanup one, handled here best-effort.
+    void this.mcpServer?.stop().catch(() => { /* already stopped / never started */ });
     this.log.append(eventType, data);
     this.resolveResult(result);
   }
@@ -124,14 +147,48 @@ export class Mission {
       delegate: (from, args) => this.delegate(from, args),
       emitMessage: (msg) => this.route(msg),
     };
-    const tools = {
-      ...makeCoordinationTools({ nodeId, taskId, parentId, captain }, api),
-      ...(captain ? {} : makeFileTools(this.workspaceDir)),
-    };
+
+    // WHY driver kind gates BOTH the ctx and the tools: a claude-code/codex
+    // node's real actions happen over MCP — registered with this mission's
+    // hosted server right here, driven via mcpUrl/token in driverCtx — never
+    // through an AI-SDK ToolSet, so makeCoordinationTools would be dead
+    // weight the model has no way to call (retired per the M4 brief: fenced-
+    // JSON/PROTOCOL_INSTRUCTIONS/formatTurnPrompt are CliDriver-internal and
+    // never touched by the Mcp* drivers either). Only the api driver
+    // (AiSdkDriver, via generateText) and the custom/fenced-JSON CliDriver
+    // path read NodeDeps.tools — both keep the coordination + file tools they
+    // had before M4.
+    const isMcpNode = ref.driver === 'claude-code' || ref.driver === 'codex';
+    let driverCtx: DriverFactoryCtx = { workspaceDir: this.workspaceDir };
+    if (isMcpNode) {
+      // WHY parentId is threaded here (not left to role-inference): parentId
+      // is already the real upstream target — 'operator' for the captain,
+      // the calling node's id for crew — so passing it through makes the MCP
+      // server's addressing correct by construction rather than relying on
+      // its own role-based fallback (see McpNodeContext's doc comment).
+      const token = this.mcpServer!.registerNode({ nodeId, role: captain ? 'captain' : 'crew', api, taskId, parentId });
+      driverCtx = {
+        workspaceDir: this.workspaceDir,
+        mcpUrl: this.mcpUrl!,
+        token,
+        // WHY a secondary trail, not the primary real-time signal: delegate/
+        // report/deliver/escalate/answer already append 'message'/
+        // 'node.spawned' events the INSTANT a tool handler calls the
+        // KernelApi (synchronously, mid-subprocess, via ctx.api above) — the
+        // TUI feed already updates live from those. This appends the raw
+        // wire-level tool_use/tool_result pair (name/input/result text) as
+        // its own audit event once the whole CLI turn returns.
+        onToolEvent: (event) => this.log.append('mcp.tool', { nodeId, ...event }),
+      };
+    }
+    const tools = isMcpNode
+      ? {}
+      : { ...makeCoordinationTools({ nodeId, taskId, parentId, captain }, api), ...(captain ? {} : makeFileTools(this.workspaceDir)) };
+
     const node = new AgentNode(
       { id: nodeId, parentId, role, charter: captain ? charter : charter + CREW_SUFFIX, taskId, depth, captain },
       {
-        driver: this.deps.driverFactory(ref, { workspaceDir: this.workspaceDir }),
+        driver: this.deps.driverFactory(ref, driverCtx),
         tools,
         log: this.log,
         maxStepsPerTurn: this.config.maxStepsPerTurn,

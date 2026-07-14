@@ -28,8 +28,18 @@ class ScriptedDriver implements TurnDriver {
   }
 }
 
-function newMission(steps: Step[]): Mission {
-  return new Mission('test order', defaultConfig(), { driverFactory: () => new ScriptedDriver(steps) });
+// WHY captainDriver defaults to 'claude-code' but the escalate test overrides
+// to 'api': post-M4, a claude-code/codex-labeled node gets an EMPTY tool set
+// from the kernel (its real actions go over MCP, not AI-SDK tools — see
+// kernel.ts's isMcpNode branch) — this file's ScriptedDriver calls
+// `input.tools[step.tool].execute(...)` directly, which needs a real tool
+// there. Tests that only check the captain-row badge/rendering (never a tool
+// call) are unaffected and keep the real 'claude-code' default so the badge
+// assertion stays meaningful.
+function newMission(steps: Step[], captainDriver: 'claude-code' | 'api' = 'claude-code'): Mission {
+  const config = defaultConfig();
+  if (captainDriver === 'api') config.models.captain = { driver: 'api', provider: 'anthropic', model: 'claude-sonnet-5' };
+  return new Mission('test order', config, { driverFactory: () => new ScriptedDriver(steps) });
 }
 
 describe('App', () => {
@@ -96,7 +106,7 @@ describe('App', () => {
     const mission = newMission([
       { tool: 'escalate', args: { question: 'which venue scope?' } },
       { text: '' },
-    ]);
+    ], 'api');
     const resultPromise = mission.start();
     const answerSpy = vi.spyOn(mission, 'answerEscalation');
 

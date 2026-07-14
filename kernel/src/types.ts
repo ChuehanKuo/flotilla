@@ -21,7 +21,7 @@ export interface FleetMessage {
 
 export type EventType =
   | 'mission.started' | 'node.spawned' | 'message' | 'task.state'
-  | 'tool.called' | 'usage' | 'watchdog'
+  | 'tool.called' | 'mcp.tool' | 'usage' | 'watchdog'
   | 'mission.completed' | 'mission.canceled' | 'mission.failed';
 
 export interface FleetEvent {

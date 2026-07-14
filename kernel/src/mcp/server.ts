@@ -11,6 +11,16 @@ export interface McpNodeContext {
   role: 'captain' | 'crew';
   api: KernelApi;
   taskId: string;
+  // WHY optional, used-when-present: v0.3's fleet is a fixed two-tier
+  // hierarchy (kernel.ts spawns the captain with the literal nodeId
+  // 'captain'; every crew node's parent is that captain, and crew is
+  // role-gated off delegate so it can never grow a third tier), so role
+  // alone is ALREADY sufficient to address upward correctly today —
+  // upstream() below falls back to that inference when parentId is absent
+  // (every existing caller/test). When the real caller (kernel.ts) supplies
+  // it, addressing is correct by construction instead of by relying on that
+  // gate holding.
+  parentId?: string;
 }
 
 type ToolResult = { content: [{ type: 'text'; text: string }] };
@@ -23,13 +33,10 @@ function roleError(tool: string): ToolResult {
   return textResult(`error: ${tool} is not available to this role`);
 }
 
-// WHY 'to' is derived from role rather than carried on McpNodeContext: v0.3's
-// fleet is a fixed two-tier hierarchy (kernel.ts spawns the captain with the
-// literal nodeId 'captain'; every crew node's parent is that captain). The
-// brief's McpNodeContext intentionally has no parentId field — role alone is
-// enough to address upward: captain -> operator, crew -> captain.
+// WHY parentId first, role-inference as fallback: see McpNodeContext's
+// parentId doc comment above.
 function upstream(ctx: McpNodeContext): string {
-  return ctx.role === 'captain' ? 'operator' : 'captain';
+  return ctx.parentId ?? (ctx.role === 'captain' ? 'operator' : 'captain');
 }
 
 function makeNodeServer(ctx: McpNodeContext): McpServer {

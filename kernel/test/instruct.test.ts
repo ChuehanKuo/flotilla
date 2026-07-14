@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Mission } from '../src/kernel.js';
 import { defaultConfig } from '../src/types.js';
 import { AiSdkDriver, type TurnDriver, type TurnInput, type TurnOutput } from '../src/driver.js';
-import { scriptedModel } from './helpers.js';
+import { scriptedModel, apiConfig } from './helpers.js';
 
 /** Wraps a driver, recording the formatted `newText` batch it receives each turn. */
 class RecordingDriver implements TurnDriver {
@@ -43,7 +43,7 @@ describe('Mission.instruct', () => {
     const scripts = [captainSteps, crew1Steps, crew2Steps];
     let callIndex = 0;
     const driverFactory = () => new AiSdkDriver(scriptedModel(scripts[callIndex++]));
-    const mission = new Mission('do a thing', defaultConfig(), { driverFactory });
+    const mission = new Mission('do a thing', apiConfig(), { driverFactory });
 
     const resultPromise = mission.start();
     await sleep(20);
@@ -63,7 +63,7 @@ describe('Mission.instruct', () => {
       { text: '' }, // turn 2 (INSTRUCT): delivers to the operator, finishing the mission
     ];
     const recorder = new RecordingDriver(new AiSdkDriver(scriptedModel(captainSteps)));
-    const mission = new Mission('survey ICU capacity', defaultConfig(), { driverFactory: () => recorder });
+    const mission = new Mission('survey ICU capacity', apiConfig(), { driverFactory: () => recorder });
 
     const resultPromise = mission.start();
     await sleep(20); // let turn 1 finish so the captain is idle and 'working'
