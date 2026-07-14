@@ -18,7 +18,11 @@ An event-sourced coordination kernel for hierarchical, multi-provider AI agent f
 ## Quickstart
 
 Flota's default config rides [Claude Code](https://claude.com/claude-code)
-(`claude`), signed in on your subscription — no API keys, $0 marginal.
+(`claude`), signed in on your subscription — no API keys and no per-token
+bill. Note this isn't "free": missions consume your Claude subscription's
+usage quota and rate limits like any other Claude Code work, so heavy or
+many-crew runs draw down the same budget as the rest of your Claude usage.
+The `api` driver (below) is the metered-cost alternative with a hard dollar cap.
 
 ```bash
 npm install
