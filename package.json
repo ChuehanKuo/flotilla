@@ -2,11 +2,11 @@
   "name": "flota",
   "private": true,
   "type": "module",
-  "workspaces": ["kernel", "cli", "tui"],
+  "workspaces": ["kernel", "cli", "tui", "observatory"],
   "engines": { "node": ">=20" },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -b kernel cli tui"
+    "typecheck": "tsc -b kernel cli tui observatory"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
