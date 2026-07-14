@@ -81,18 +81,6 @@ export function formatTurnPrompt(newText: string, pendingCommandResults: string[
   return `${header}\n\n${neutralized}`;
 }
 
-// WHY this is the shared tail of every driver's turn(): once a CLI reply has been
-// reduced to its result text, parsing the flota block and executing any commands
-// is identical regardless of which CLI produced that text.
-export async function runTurnProtocol(
-  resultText: string,
-  tools: ToolSet,
-): Promise<{ text: string; pendingCommandResults: string[] }> {
-  const { commands, cleanText } = parseCommands(resultText);
-  const pendingCommandResults = await executeCommands(commands, tools);
-  return { text: cleanText, pendingCommandResults };
-}
-
 export async function executeCommands(commands: Command[], tools: ToolSet): Promise<string[]> {
   const results: string[] = [];
   for (const element of commands as unknown[]) {
