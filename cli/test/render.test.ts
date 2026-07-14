@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { formatEvent } from '../src/render.js';
-import type { FleetEvent } from '@flotilla/kernel';
+import type { FleetEvent } from '@flota/kernel';
 
 const ev = (type: string, data: Record<string, unknown>): FleetEvent =>
   ({ eventId: 'e', seq: 1, ts: '2026-07-13T12:04:11.000Z', missionId: 'm-x', type: type as any, data });

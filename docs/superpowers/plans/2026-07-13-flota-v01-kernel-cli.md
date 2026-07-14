@@ -1,10 +1,10 @@
-# Flotilla v0.1 — Kernel + CLI Implementation Plan
+# Flota v0.1 — Kernel + CLI Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the Flotilla coordination kernel (event-sourced, hierarchical, multi-provider) and the terminal CLI, ending with a real demo mission: a captain decomposing a literature scan across crew on two providers.
+**Goal:** Build the Flota coordination kernel (event-sourced, hierarchical, multi-provider) and the terminal CLI, ending with a real demo mission: a captain decomposing a literature scan across crew on two providers.
 
-**Architecture:** Per `docs/specs/2026-07-13-flotilla-design.md`. Everything is an event appended to one JSONL log per mission; fleet state is a reducer over that log. Agent nodes are inbox-driven loops around Vercel AI SDK `generateText` calls; delegation is a tool whose execution spawns a child node. The kernel enforces all safety rails (depth/children/concurrency caps, budget refusal, retry-then-escalate, watchdog, wall-clock timeout, cancel). The CLI starts a per-mission kernel, tails events as lines, and answers operator escalations inline. The Tauri observatory is a **separate later plan** — nothing in this plan may depend on it.
+**Architecture:** Per `docs/specs/2026-07-13-flota-design.md`. Everything is an event appended to one JSONL log per mission; fleet state is a reducer over that log. Agent nodes are inbox-driven loops around Vercel AI SDK `generateText` calls; delegation is a tool whose execution spawns a child node. The kernel enforces all safety rails (depth/children/concurrency caps, budget refusal, retry-then-escalate, watchdog, wall-clock timeout, cancel). The CLI starts a per-mission kernel, tails events as lines, and answers operator escalations inline. The Tauri observatory is a **separate later plan** — nothing in this plan may depend on it.
 
 **Tech Stack:** Node ≥ 20, TypeScript ^5 (ESM), npm workspaces (`kernel/`, `cli/`), Vercel AI SDK `ai@^5` + `@ai-sdk/anthropic@^2` + `@ai-sdk/openai@^2`, `zod@^3.25`, `vitest@^3`, `tsx`, `commander@^13`, `picocolors`.
 
@@ -29,7 +29,7 @@ package.json                 # workspaces root, scripts
 tsconfig.base.json           # shared strict TS config
 vitest.workspace.ts
 kernel/
-  package.json               # @flotilla/kernel
+  package.json               # @flota/kernel
   tsconfig.json
   src/types.ts               # events, messages, states, config — the vocabulary
   src/log.ts                 # EventLog: append-only JSONL + subscribe + load
@@ -44,7 +44,7 @@ kernel/
   test/helpers.ts            # scripted mock models
   test/*.test.ts
 cli/
-  package.json               # @flotilla/cli, bin: flotilla
+  package.json               # @flota/cli, bin: flota
   tsconfig.json
   src/render.ts              # FleetEvent → colored terminal line
   src/run.ts                 # run command: kernel + tail + escalation prompt
@@ -70,7 +70,7 @@ cli/
 `package.json`:
 ```json
 {
-  "name": "flotilla",
+  "name": "flota",
   "private": true,
   "type": "module",
   "workspaces": ["kernel", "cli"],
@@ -114,7 +114,7 @@ export default defineConfig({ test: { projects: ['kernel', 'cli'] } });
 `kernel/package.json`:
 ```json
 {
-  "name": "@flotilla/kernel",
+  "name": "@flota/kernel",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -135,12 +135,12 @@ export default defineConfig({ test: { projects: ['kernel', 'cli'] } });
 `cli/package.json`:
 ```json
 {
-  "name": "@flotilla/cli",
+  "name": "@flota/cli",
   "version": "0.1.0",
   "type": "module",
-  "bin": { "flotilla": "src/index.ts" },
+  "bin": { "flota": "src/index.ts" },
   "dependencies": {
-    "@flotilla/kernel": "*",
+    "@flota/kernel": "*",
     "commander": "^13.0.0",
     "picocolors": "^1.1.0"
   }
@@ -221,7 +221,7 @@ describe('EventLog', () => {
   });
 
   it('persists JSONL and round-trips via load', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'flotilla-')), 'events.jsonl');
+    const file = join(mkdtempSync(join(tmpdir(), 'flota-')), 'events.jsonl');
     const log = new EventLog('m-test', file);
     log.append('mission.started', { order: 'scan' });
     log.append('mission.completed', { result: 'ok' });
@@ -232,7 +232,7 @@ describe('EventLog', () => {
   });
 
   it('load skips unparseable lines instead of throwing', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'flotilla-')), 'events.jsonl');
+    const file = join(mkdtempSync(join(tmpdir(), 'flota-')), 'events.jsonl');
     const log = new EventLog('m-test', file);
     log.append('mission.started', { order: 'scan' });
     log.append('mission.completed', { result: 'ok' });
@@ -754,7 +754,7 @@ const opts = { toolCallId: 't', messages: [] as any[] };
 
 describe('file tools sandbox', () => {
   it('writes, lists, reads inside the workspace', async () => {
-    const ws = mkdtempSync(join(tmpdir(), 'flotilla-ws-'));
+    const ws = mkdtempSync(join(tmpdir(), 'flota-ws-'));
     const tools = makeFileTools(ws) as any;
     await tools.write_file.execute({ path: 'notes/a.md', content: 'hello' }, opts);
     const listing = await tools.list_files.execute({}, opts);
@@ -764,7 +764,7 @@ describe('file tools sandbox', () => {
   });
 
   it('rejects path escapes', async () => {
-    const ws = mkdtempSync(join(tmpdir(), 'flotilla-ws-'));
+    const ws = mkdtempSync(join(tmpdir(), 'flota-ws-'));
     const tools = makeFileTools(ws) as any;
     const r1 = await tools.write_file.execute({ path: '../evil.txt', content: 'x' }, opts);
     const r2 = await tools.read_file.execute({ path: '/etc/passwd' }, opts);
@@ -1432,7 +1432,7 @@ export class Mission {
       mkdirSync(this.workspaceDir, { recursive: true });
       this.log = new EventLog(this.id, join(dir, 'events.jsonl'));
     } else {
-      this.workspaceDir = mkdtempSync(join(tmpdir(), 'flotilla-ws-'));
+      this.workspaceDir = mkdtempSync(join(tmpdir(), 'flota-ws-'));
       this.log = new EventLog(this.id);
     }
     this.budget = new BudgetTracker(config.pricing, config.budgetUsd);
@@ -1848,7 +1848,7 @@ git commit -m "feat(kernel): enforce budget cap, watchdog, timeout, cancel rails
 - Test: `cli/test/render.test.ts`
 
 **Interfaces:**
-- Consumes: `Mission`, `realModelFactory`, `defaultConfig`, `FleetEvent` from `@flotilla/kernel`.
+- Consumes: `Mission`, `realModelFactory`, `defaultConfig`, `FleetEvent` from `@flota/kernel`.
 - Produces:
   - `formatEvent(e: FleetEvent): string | null` — one colored line per event; returns `null` for events not shown (`tool.called`, `task.state`). Format (picocolors; plain text shown here):
     ```
@@ -1863,7 +1863,7 @@ git commit -m "feat(kernel): enforce budget cap, watchdog, timeout, cancel rails
     12:06:02 ■ mission completed ($0.87)
     ```
     Message texts truncate at 100 chars with `…`; DELIVER shows `[N chars]` instead of the text.
-  - `flotilla run "<order>" [--budget <usd>] [--missions-dir <path>]` — builds config (`defaultConfig()` + overrides), verifies the needed `*_API_KEY` env vars exist (exit 1 with a clear message if not), starts the Mission, subscribes `formatEvent` lines to stdout, and on operator escalation prints the question and reads one line from stdin (`node:readline/promises`) → `mission.answerEscalation`. On completion prints the result text and cost summary; exit code 0 for completed, 1 otherwise.
+  - `flota run "<order>" [--budget <usd>] [--missions-dir <path>]` — builds config (`defaultConfig()` + overrides), verifies the needed `*_API_KEY` env vars exist (exit 1 with a clear message if not), starts the Mission, subscribes `formatEvent` lines to stdout, and on operator escalation prints the question and reads one line from stdin (`node:readline/promises`) → `mission.answerEscalation`. On completion prints the result text and cost summary; exit code 0 for completed, 1 otherwise.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1871,7 +1871,7 @@ git commit -m "feat(kernel): enforce budget cap, watchdog, timeout, cancel rails
 ```ts
 import { describe, it, expect } from 'vitest';
 import { formatEvent } from '../src/render.js';
-import type { FleetEvent } from '@flotilla/kernel';
+import type { FleetEvent } from '@flota/kernel';
 
 const ev = (type: string, data: Record<string, unknown>): FleetEvent =>
   ({ eventId: 'e', seq: 1, ts: '2026-07-13T12:04:11.000Z', missionId: 'm-x', type: type as any, data });
@@ -1910,7 +1910,7 @@ Expected: FAIL — cannot resolve `../src/render.js`.
 `cli/src/render.ts`:
 ```ts
 import pc from 'picocolors';
-import type { FleetEvent } from '@flotilla/kernel';
+import type { FleetEvent } from '@flota/kernel';
 
 const KIND_ICON: Record<string, string> = { ORDER: '→', REPORT: '←', DELIVER: '✓', ESCALATE: '⚠', ANSWER: '↩' };
 
@@ -1945,7 +1945,7 @@ export function formatEvent(e: FleetEvent): string | null {
 ```ts
 import { createInterface } from 'node:readline/promises';
 import pc from 'picocolors';
-import { Mission, defaultConfig, realModelFactory } from '@flotilla/kernel';
+import { Mission, defaultConfig, realModelFactory } from '@flota/kernel';
 import { formatEvent } from './render.js';
 
 export async function runMission(order: string, opts: { budget?: string; missionsDir?: string }): Promise<number> {
@@ -2010,7 +2010,7 @@ import { Command } from 'commander';
 import { runMission } from './run.js';
 import { replay } from './replay.js';
 
-const program = new Command('flotilla');
+const program = new Command('flota');
 program.command('run <order>')
   .description('run a mission: a captain decomposes your order across crew agents')
   .option('--budget <usd>', 'hard mission budget cap in USD')
@@ -2061,7 +2061,7 @@ import { replay } from '../src/replay.js';
 
 describe('replay', () => {
   it('re-renders a persisted mission log in order', async () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'flotilla-replay-')), 'events.jsonl');
+    const file = join(mkdtempSync(join(tmpdir(), 'flota-replay-')), 'events.jsonl');
     const events = [
       { eventId: 'a', seq: 1, ts: '2026-07-13T12:00:00.000Z', missionId: 'm-1', type: 'mission.started', data: { order: 'scan' } },
       { eventId: 'b', seq: 2, ts: '2026-07-13T12:00:01.000Z', missionId: 'm-1', type: 'task.state', data: { taskId: 't1', state: 'working' } },
@@ -2076,7 +2076,7 @@ describe('replay', () => {
   });
 
   it('renders a marker line for shape-malformed records instead of crashing', async () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'flotilla-replay-')), 'events.jsonl');
+    const file = join(mkdtempSync(join(tmpdir(), 'flota-replay-')), 'events.jsonl');
     const events = [
       { eventId: 'a', seq: 1, ts: '2026-07-13T12:00:00.000Z', missionId: 'm-1', type: 'mission.started', data: { order: 'scan' } },
       // a message event missing data.text — formatEvent throws on d.text.length
@@ -2101,7 +2101,7 @@ Expected: FAIL — stub renders nothing.
 `cli/src/replay.ts`:
 ```ts
 import { createInterface } from 'node:readline/promises';
-import { EventLog } from '@flotilla/kernel';
+import { EventLog } from '@flota/kernel';
 import { formatEvent } from './render.js';
 
 export async function replay(eventsFile: string, opts: { step?: boolean }, out?: (line: string) => void): Promise<void> {
@@ -2207,7 +2207,7 @@ git commit -m "docs: quickstart; verify live demo mission on two providers"
 **Phase-2 Global Constraints (in addition to the originals):**
 - `TurnDriver` is the single seam: `turn(input: TurnInput): Promise<TurnOutput>`. AgentNode/kernel never know which runtime produced a turn.
 - CLI drivers are tested against **stub binaries** (shell scripts passed via `bin` option) — tests never invoke the real `claude`/`codex` or any subscription.
-- Coordination from CLI nodes travels as one fenced ` ```flotilla ` JSON block: `{"commands":[...]}` — parsed by `parseCommands`, executed against the SAME coordination ToolSet. Command results are queued by the driver and prefixed to the node's next turn.
+- Coordination from CLI nodes travels as one fenced ` ```flota ` JSON block: `{"commands":[...]}` — parsed by `parseCommands`, executed against the SAME coordination ToolSet. Command results are queued by the driver and prefixed to the node's next turn.
 - Subscription turns report `billing: 'subscription'`; kernel logs their usage with `costUsd: 0` (never run subscription usage through the pricing table — the max-rate fallback would false-trip the cap). `$` cap continues to bite for `billing: 'api'`.
 - New rail: `maxTurnsPerNode` (default 20), kernel-enforced in `beforeModelCall` via per-node counters → existing retry-then-escalate machinery.
 - `watchdogMs` default becomes 600_000 (CLI turns are slow).
@@ -2312,7 +2312,7 @@ export function parseCommands(text: string): { commands: Command[]; cleanText: s
 export async function executeCommands(commands: Command[], tools: ToolSet): Promise<string[]>;
 export const PROTOCOL_INSTRUCTIONS: string;
 ```
-Behavior to pin with tests: (1) extracts the LAST fenced block labeled `flotilla` containing `{"commands":[...]}`, removes it from cleanText, returns typed commands; (2) invalid JSON / no block / unlabeled block → `{ commands: [], cleanText: text }`; (3) `executeCommands` maps cmd→tool name (delegate/report/deliver/escalate/answer), calls `tool.execute(argsWithoutCmd, { toolCallId: 'proto', messages: [] })`, collects `"<cmd> → <result>"` strings; unknown cmd or missing tool → `"<cmd> → error: unknown command"`; a throwing execute → `"<cmd> → error: <message>"` (never rejects). (4) `PROTOCOL_INSTRUCTIONS` teaches the fenced-block format and mandates ending with a `deliver` command when the task is done. TDD, commit `feat(kernel): fenced JSON command protocol for CLI-driver nodes`.
+Behavior to pin with tests: (1) extracts the LAST fenced block labeled `flota` containing `{"commands":[...]}`, removes it from cleanText, returns typed commands; (2) invalid JSON / no block / unlabeled block → `{ commands: [], cleanText: text }`; (3) `executeCommands` maps cmd→tool name (delegate/report/deliver/escalate/answer), calls `tool.execute(argsWithoutCmd, { toolCallId: 'proto', messages: [] })`, collects `"<cmd> → <result>"` strings; unknown cmd or missing tool → `"<cmd> → error: unknown command"`; a throwing execute → `"<cmd> → error: <message>"` (never rejects). (4) `PROTOCOL_INSTRUCTIONS` teaches the fenced-block format and mandates ending with a `deliver` command when the task is done. TDD, commit `feat(kernel): fenced JSON command protocol for CLI-driver nodes`.
 
 ### Task P3: ClaudeCodeDriver
 
@@ -2323,7 +2323,7 @@ Behavior to pin with tests: (1) extracts the LAST fenced block labeled `flotilla
 **Contract:** `new ClaudeCodeDriver({ workspaceDir, bin?, timeoutMs? })` implements TurnDriver.
 - First turn args: `['-p', promptText, '--output-format', 'json', '--append-system-prompt', system + '\n\n' + PROTOCOL_INSTRUCTIONS, '--allowedTools', 'Read,Write,Edit,Glob,Grep']`; later turns replace the system flag with `['--resume', sessionId]`. `promptText` = pending command results (if any, under a `[command results]` header) + newText. Spawn via `execFile(bin ?? 'claude', args, { cwd: workspaceDir, signal, timeout: timeoutMs ?? 600_000, maxBuffer: 10 * 2 ** 20 })`.
 - Parse stdout as JSON: `{ result, session_id, usage: { input_tokens, output_tokens } }` (fields defensive-defaulted). Store `session_id`. `parseCommands(result)` → `executeCommands(...)` → queue result strings for next turn. Return `{ text: cleanText, responseMessages: [], usage, billing: 'subscription' }`. Unparseable stdout → throw (node retry-then-escalate handles it).
-- Stub binary `fake-claude.sh`: appends its argv as one JSON line to the file named by env `FAKE_CLI_LOG`, then prints a canned JSON payload selected by env `FAKE_CLI_REPLY` (allows scripting two-turn tests). Tests pin: first-turn args include `--append-system-prompt` (with PROTOCOL_INSTRUCTIONS) and NOT `--resume`; second turn includes `--resume <session_id from first reply>`; a reply whose `result` carries a ` ```flotilla ` deliver block causes the deliver tool to fire (fake ToolSet records calls) and the block is stripped from returned text; command results from turn 1 appear in turn 2's prompt under `[command results]`.
+- Stub binary `fake-claude.sh`: appends its argv as one JSON line to the file named by env `FAKE_CLI_LOG`, then prints a canned JSON payload selected by env `FAKE_CLI_REPLY` (allows scripting two-turn tests). Tests pin: first-turn args include `--append-system-prompt` (with PROTOCOL_INSTRUCTIONS) and NOT `--resume`; second turn includes `--resume <session_id from first reply>`; a reply whose `result` carries a ` ```flota ` deliver block causes the deliver tool to fire (fake ToolSet records calls) and the block is stripped from returned text; command results from turn 1 appear in turn 2's prompt under `[command results]`.
 Commit `feat(kernel): ClaudeCodeDriver — headless claude -p on subscription auth`.
 
 ### Task P4: CodexDriver
@@ -2365,7 +2365,7 @@ Rails test: config `maxTurnsPerNode: 0` → captain's first call fails twice →
 ```markdown
 ## Quickstart (v0.1)
 
-Flotilla's default config rides the agent CLIs you already have:
+Flota's default config rides the agent CLIs you already have:
 [Claude Code](https://claude.com/claude-code) (`claude`) and OpenAI's Codex CLI
 (`codex`), each signed in on its own subscription — no API keys, $0 marginal.
 

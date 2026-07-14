@@ -6,7 +6,7 @@ import { replay } from '../src/replay.js';
 
 describe('replay', () => {
   it('re-renders a persisted mission log in order', async () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'flotilla-replay-')), 'events.jsonl');
+    const file = join(mkdtempSync(join(tmpdir(), 'flota-replay-')), 'events.jsonl');
     const events = [
       { eventId: 'a', seq: 1, ts: '2026-07-13T12:00:00.000Z', missionId: 'm-1', type: 'mission.started', data: { order: 'scan' } },
       { eventId: 'b', seq: 2, ts: '2026-07-13T12:00:01.000Z', missionId: 'm-1', type: 'task.state', data: { taskId: 't1', state: 'working' } },
@@ -21,7 +21,7 @@ describe('replay', () => {
   });
 
   it('renders a marker line for shape-malformed records instead of crashing', async () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'flotilla-replay-')), 'events.jsonl');
+    const file = join(mkdtempSync(join(tmpdir(), 'flota-replay-')), 'events.jsonl');
     const events = [
       { eventId: 'a', seq: 1, ts: '2026-07-13T12:00:00.000Z', missionId: 'm-1', type: 'mission.started', data: { order: 'scan' } },
       // a message event missing data.text — formatEvent throws on d.text.length

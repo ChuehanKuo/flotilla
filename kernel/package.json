@@ -1,15 +1,18 @@
 {
-  "name": "@flotilla/kernel",
+  "name": "@flota/kernel",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.0",
     "@ai-sdk/openai": "^2.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "ai": "^5.0.0",
+    "express": "^4.21.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@types/express": "^4.17.21",
     "msw": "^2.7.0"
   }
 }

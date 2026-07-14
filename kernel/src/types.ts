@@ -1,11 +1,13 @@
+import type { CliDriverSpec } from './drivers/specs.js';
+
 export type Provider = 'anthropic' | 'openai';
-export type DriverKind = 'api' | 'claude-code' | 'codex';
+export type DriverKind = 'api' | 'claude-code' | 'codex' | 'custom';
 
 export type TaskState =
   | 'submitted' | 'working' | 'input-required'
   | 'completed' | 'failed' | 'canceled' | 'rejected';
 
-export type MessageKind = 'ORDER' | 'REPORT' | 'DELIVER' | 'ESCALATE' | 'ANSWER';
+export type MessageKind = 'ORDER' | 'REPORT' | 'DELIVER' | 'ESCALATE' | 'ANSWER' | 'INSTRUCT';
 
 export interface FleetMessage {
   kind: MessageKind;
@@ -19,7 +21,7 @@ export interface FleetMessage {
 
 export type EventType =
   | 'mission.started' | 'node.spawned' | 'message' | 'task.state'
-  | 'tool.called' | 'usage' | 'watchdog'
+  | 'tool.called' | 'mcp.tool' | 'usage' | 'watchdog'
   | 'mission.completed' | 'mission.canceled' | 'mission.failed';
 
 export interface FleetEvent {
@@ -32,7 +34,11 @@ export interface FleetEvent {
 }
 
 export interface ModelRef { provider: Provider; model: string }
-export interface NodeRef { driver: DriverKind; provider?: Provider; model?: string }
+// spec is required (by realDriverFactory, at runtime) when driver === 'custom'
+// — it's optional on the type because NodeRef is shared across all driver
+// kinds and TypeScript can't discriminate on a sibling field's literal value
+// without a full discriminated-union rewrite of this interface.
+export interface NodeRef { driver: DriverKind; provider?: Provider; model?: string; spec?: CliDriverSpec }
 
 export interface MissionConfig {
   budgetUsd: number;

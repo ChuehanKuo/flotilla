@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import type { FleetEvent } from '@flotilla/kernel';
+import type { FleetEvent } from '@flota/kernel';
 
 const KIND_ICON: Record<string, string> = { ORDER: '→', REPORT: '←', DELIVER: '✓', ESCALATE: '⚠', ANSWER: '↩' };
 

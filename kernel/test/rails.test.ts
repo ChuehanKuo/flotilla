@@ -2,12 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Mission } from '../src/kernel.js';
 import { defaultConfig } from '../src/types.js';
 import { AiSdkDriver } from '../src/driver.js';
-import { scriptedModel } from './helpers.js';
+import { scriptedModel, apiConfig } from './helpers.js';
 
 describe('rails', () => {
   it('fails the mission when the budget cap is hit', async () => {
     // pricing that makes the first usage event blow the cap
-    const cfg = { ...defaultConfig(), budgetUsd: 0.000001 };
+    const cfg = { ...apiConfig(), budgetUsd: 0.000001 };
     const captain = scriptedModel([
       { toolName: 'delegate', input: { role: 'a', charter: 'c', task: 't' } },
       { text: 'awaiting' },
@@ -73,7 +73,7 @@ describe('rails', () => {
   });
 
   it('a refused delegate leaves a tool.called audit event', async () => {
-    const cfg = { ...defaultConfig(), maxChildren: 0 };
+    const cfg = { ...apiConfig(), maxChildren: 0 };
     const captain = scriptedModel([
       { toolName: 'delegate', input: { role: 'a', charter: 'c', task: 't' } },
       { text: 'FINAL: no crew' },
@@ -106,7 +106,7 @@ describe('rails', () => {
       { text: 'awaiting' },
       { text: 'FINAL: scoped' },
     ]);
-    const mission = new Mission('x', defaultConfig(), { driverFactory: () => new AiSdkDriver(captain) });
+    const mission = new Mission('x', apiConfig(), { driverFactory: () => new AiSdkDriver(captain) });
     mission.onOperatorEscalation(e => {
       mission.answerEscalation('t-phantom', 'lost');   // guard must drop this
       setTimeout(() => mission.answerEscalation(e.taskId, 'real answer'), 10);

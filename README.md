@@ -1,6 +1,6 @@
-# Flotilla
+# Flota
 
-**Status: v0.1 (kernel + CLI).** Design spec: [docs/specs/2026-07-13-flotilla-design.md](docs/specs/2026-07-13-flotilla-design.md) · desktop observatory app is the next phase.
+**Status: v0.2 (kernel + CLI + full-screen TUI).** Design spec: [docs/specs/2026-07-13-flota-design.md](docs/specs/2026-07-13-flota-design.md) · Tauri desktop observatory app is the next phase.
 
 An event-sourced coordination kernel for hierarchical, multi-provider AI agent fleets — plus a persistent desktop observatory to watch and steer them live. For anyone running multi-agent work, on any terminal and any OS (macOS is the current reference platform).
 
@@ -15,25 +15,100 @@ An event-sourced coordination kernel for hierarchical, multi-provider AI agent f
 
 2026-07 research sweep: every orchestration framework treats its event stream as a tappable byproduct, not the substrate; every observability tool is post-hoc trace trees; nothing does fleet-scale live topology with message-injection steering. Details and citations in the spec.
 
-## Quickstart (v0.1)
+## Quickstart
 
-Flotilla's default config rides [Claude Code](https://claude.com/claude-code)
+Flota's default config rides [Claude Code](https://claude.com/claude-code)
 (`claude`), signed in on your subscription — no API keys, $0 marginal.
 
 ```bash
 npm install
-npx tsx cli/src/index.ts run "your mission order here"
-# re-watch any past mission:
-npx tsx cli/src/index.ts replay missions/<mission-id>/events.jsonl
+npx tsx cli/src/index.ts run "your mission order here"   # opens the full-screen TUI
+# terminal-only / SSH / scripting — v0.1's plain line-tail output:
+npx tsx cli/src/index.ts run "your mission order here" --headless
+# re-watch any COMPLETED mission's log:
+npx tsx cli/src/index.ts watch missions/<mission-id>
 ```
 
-**Drivers.** `claude-code` (default) is the proven path. `codex` (OpenAI's
-Codex CLI) is **experimental in v0.1** — the driver exists and is unit-tested,
-but hangs on live contact pending real-CLI hardening (v0.2); opt in per node
-at your own risk. `api` (raw Anthropic/OpenAI keys) is fully supported: point
-a node's config at it and export `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` — the
-hard dollar cap applies there (`--budget`, default $5). Subscription nodes are
-bounded by per-node turn caps, depth caps, a watchdog, and mission timeouts.
+**Drivers.** `claude-code` (default) is the proven path — captains and crew
+delegate, report, and deliver as real MCP tool calls (`mcp__flota__*`)
+against an in-process MCP server, live-verified end-to-end (3/3 headless
+runs). `codex` (OpenAI's Codex CLI) is **experimental** — v0.3 rebuilt it on
+the same MCP wiring (`McpCodexDriver`) and it's unit-tested, but not yet
+live-verified against the real `codex` binary; opt in per node at your own
+risk pending that verification run. `api` (raw Anthropic/OpenAI keys) is fully
+supported: point a node's config at it and export `ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY` — the hard dollar cap applies there (`--budget`, default
+$5). `custom` lets you point a
+node at any agent CLI you already have installed (see "Bring your own agent
+CLI" below). Subscription nodes are bounded by per-node turn caps, depth
+caps, a watchdog, and mission timeouts.
+
+## The TUI
+
+`flota run "<order>"` opens a full-screen fleet view by default (an Ink app —
+any terminal, no browser): the fleet tree on the left (captain + crew, each
+row showing its driver badge, live task state, and running cost), an
+inspector pane on the right for the selected node's message/usage/task-state
+feed, an escalation inbox banner across the top whenever a node is blocked
+waiting on you, and an input bar along the bottom.
+
+| Key | Action |
+| --- | --- |
+| `j` / `k` (or `↓` / `↑`) | move the selection up/down the fleet tree |
+| `i` | instruct the selected node — send it operator guidance for its next turn, without reassigning the task |
+| `a` | answer the open escalation raised by the selected node (falls back to the oldest open escalation) |
+| `Enter` | submit the instruct/answer buffer |
+| `Esc` | cancel the buffer, back to browse |
+| `q` | quit the TUI |
+| `Ctrl-C` | kill the mission outright (browse mode); while typing, just cancels the buffer instead — a stray Ctrl-C mid-sentence can't kill a running mission |
+
+`--headless` skips the TUI and reproduces v0.1's plain line-tail output plus
+a blocking terminal prompt for escalations — exact same behavior, unchanged.
+
+`flota watch <eventsFile-or-missionDir>` re-renders a **completed** mission's
+log (same renderer as `replay`, but also accepts a mission directory). Live
+read-only attach to an in-progress mission is a v0.2-later follow-up — to
+watch a mission live today, run it with `flota run` (no `--headless`).
+
+## Bring your own agent CLI
+
+The `custom` driver kind lets a node run any agent CLI you already have
+installed and signed in — Flota spawns it via `execFile` (no shell, inherits
+your process env) once per turn; it never bundles or manages auth itself.
+There's no `--driver` flag yet, so wiring one in is config-level: hand-build
+a `MissionConfig` and construct `Mission` yourself. Sketch, pointed at a
+hypothetical `gemini` CLI (an `aider`-style CLI would look the same — only
+`command`/`firstArgs`/`resumeArgs`/`parse` change):
+
+```ts
+import { Mission, defaultConfig, realDriverFactory, type CliDriverSpec } from '@flota/kernel';
+
+const geminiSpec: CliDriverSpec = {
+  command: 'gemini',
+  firstArgs: (ctx) => ['-p', `${ctx.system}\n\n${ctx.protocol}\n\n${ctx.prompt}`, '--json'],
+  resumeArgs: (ctx) => ['-p', ctx.prompt, '--session', ctx.sessionId as string, '--json'],
+  parse: (stdout) => {
+    const last = JSON.parse(stdout.trim().split('\n').pop()!);
+    return { transcript: last.text, sessionId: last.session_id, usage: { inputTokens: 0, outputTokens: 0 } };
+  },
+};
+
+const config = defaultConfig();
+config.models.crew = [{ driver: 'custom', spec: geminiSpec }];
+
+const mission = new Mission('your order here', config, { driverFactory: realDriverFactory, missionsDir: './missions' });
+mission.log.subscribe(e => console.log(e));
+await mission.start();
+```
+
+A spec owns exactly two things: how to build `argv` for a first turn versus a
+resumed one (from `ctx.prompt` / `ctx.system` / `ctx.protocol` /
+`ctx.workspaceDir` / `ctx.sessionId`), and how to reduce the CLI's stdout into
+`{ transcript, displayText?, sessionId?, usage }`. `CLAUDE_CODE_SPEC` and
+`CODEX_SPEC` in `kernel/src/drivers/specs.ts` are two real, working examples
+of the same shape — read either for the full contract (`parse` should throw
+on unusable output rather than return empty, so the node's retry-then-
+escalate machinery reacts instead of silently losing a turn).
 
 ## Protocol posture
 

@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline/promises';
-import { EventLog } from '@flotilla/kernel';
+import { EventLog } from '@flota/kernel';
 import { formatEvent } from './render.js';
 
 export async function replay(eventsFile: string, opts: { step?: boolean }, out?: (line: string) => void): Promise<void> {
