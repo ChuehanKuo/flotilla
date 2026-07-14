@@ -1,6 +1,6 @@
 export * from './types.js';
 export { EventLog } from './log.js';
-export { reduce, nodeState, type FleetState } from './reducer.js';
+export { reduce, nodeState, type FleetState, type EscalationView, type NodeView, type TaskView } from './reducer.js';
 export { BudgetTracker, BudgetExceededError } from './budget.js';
 export { realModelFactory, realDriverFactory, type ModelFactory, type DriverFactory } from './providers.js';
 export { AiSdkDriver, type TurnDriver, type TurnInput, type TurnOutput } from './driver.js';

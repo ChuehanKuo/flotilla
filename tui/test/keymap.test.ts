@@ -1,7 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { keyToAction, applyAction, type KeyInput } from '../src/keymap.js';
+import type { Key as InkKey } from 'ink';
+import { keyToAction, applyAction, inkKeyToKeyInput, type KeyInput } from '../src/keymap.js';
 import { initialUi } from '../src/viewModel.js';
 import type { NodeRow } from '../src/viewModel.js';
+
+function inkKey(partial: Partial<InkKey>): InkKey {
+  return {
+    upArrow: false, downArrow: false, leftArrow: false, rightArrow: false,
+    pageDown: false, pageUp: false, return: false, escape: false, ctrl: false,
+    shift: false, tab: false, backspace: false, delete: false, meta: false,
+    ...partial,
+  };
+}
 
 function key(partial: Partial<KeyInput>): KeyInput {
   return { name: '', ctrl: false, sequence: '', ...partial };
@@ -61,6 +71,42 @@ describe('keyToAction — instruct/answer mode', () => {
 
   it('Ctrl-C quits (guard) rather than killing while typing', () => {
     expect(keyToAction(key({ name: 'c', ctrl: true }), ui)).toEqual({ type: 'quit' });
+  });
+});
+
+describe('inkKeyToKeyInput', () => {
+  it('maps arrow keys to name only, ignoring Ink\'s cleared input string', () => {
+    expect(inkKeyToKeyInput('', inkKey({ upArrow: true }))).toEqual({ name: 'up', ctrl: false, sequence: '' });
+    expect(inkKeyToKeyInput('', inkKey({ downArrow: true }))).toEqual({ name: 'down', ctrl: false, sequence: '' });
+    expect(inkKeyToKeyInput('', inkKey({ leftArrow: true }))).toEqual({ name: 'left', ctrl: false, sequence: '' });
+    expect(inkKeyToKeyInput('', inkKey({ rightArrow: true }))).toEqual({ name: 'right', ctrl: false, sequence: '' });
+  });
+
+  it('maps return, escape, backspace and delete by their boolean flags', () => {
+    expect(inkKeyToKeyInput('\r', inkKey({ return: true }))).toEqual({ name: 'return', ctrl: false, sequence: '\r' });
+    expect(inkKeyToKeyInput('\x1b', inkKey({ escape: true }))).toEqual({ name: 'escape', ctrl: false, sequence: '\x1b' });
+    expect(inkKeyToKeyInput('', inkKey({ backspace: true }))).toEqual({ name: 'backspace', ctrl: false, sequence: '' });
+    expect(inkKeyToKeyInput('', inkKey({ delete: true }))).toEqual({ name: 'backspace', ctrl: false, sequence: '' });
+  });
+
+  it('maps a printable char to name=sequence=input with no special flags set', () => {
+    expect(inkKeyToKeyInput('j', inkKey({}))).toEqual({ name: 'j', ctrl: false, sequence: 'j' });
+    expect(inkKeyToKeyInput('i', inkKey({}))).toEqual({ name: 'i', ctrl: false, sequence: 'i' });
+    expect(inkKeyToKeyInput(' ', inkKey({}))).toEqual({ name: ' ', ctrl: false, sequence: ' ' });
+  });
+
+  it('carries ctrl through so Ctrl-C round-trips into keyToAction\'s kill/quit guard', () => {
+    const adapted = inkKeyToKeyInput('c', inkKey({ ctrl: true }));
+    expect(adapted).toEqual({ name: 'c', ctrl: true, sequence: 'c' });
+    expect(keyToAction(adapted, initialUi())).toEqual({ type: 'kill' });
+  });
+
+  it('round-trips through keyToAction for a full instruct-mode typing flow', () => {
+    const ui = { mode: 'instruct' as const, input: '', selectedNodeId: 'crew-1' };
+    expect(keyToAction(inkKeyToKeyInput('x', inkKey({})), ui)).toEqual({ type: 'inputChar', ch: 'x' });
+    expect(keyToAction(inkKeyToKeyInput('', inkKey({ backspace: true })), ui)).toEqual({ type: 'backspace' });
+    expect(keyToAction(inkKeyToKeyInput('\r', inkKey({ return: true })), ui)).toEqual({ type: 'submit' });
+    expect(keyToAction(inkKeyToKeyInput('\x1b', inkKey({ escape: true })), ui)).toEqual({ type: 'cancelInput' });
   });
 });
 

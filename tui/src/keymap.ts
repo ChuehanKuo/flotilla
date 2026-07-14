@@ -1,3 +1,4 @@
+import type { Key as InkKey } from 'ink';
 import type { NodeRow, UiState } from './viewModel.js';
 
 export type Action =
@@ -13,13 +14,30 @@ export type Action =
   | { type: 'quit' }
   | { type: 'none' };
 
-// Shape mirrors Node's readline 'keypress' event (name/ctrl/sequence) — the
-// same shape Ink's useInput hands to raw key handlers — so the Ink shell can
-// forward its key events here unchanged.
+// Shape mirrors Node's readline 'keypress' event (name/ctrl/sequence). Ink's
+// useInput does NOT hand this shape to raw key handlers — it hands
+// (input: string, key: Key), where Key carries BOOLEAN flags (key.upArrow,
+// key.return, key.backspace, key.ctrl, ...), not {name, ctrl, sequence}. The
+// Ink shell must adapt via inkKeyToKeyInput() below before calling keyToAction.
 export interface KeyInput {
   name: string;
   ctrl: boolean;
   sequence: string;
+}
+
+// Pure adapter from Ink's useInput callback shape to KeyInput above. Kept
+// here (not buried in a component) so it's unit-testable without rendering
+// anything — only a type import from 'ink' (erased at build time), no Ink
+// runtime dependency.
+export function inkKeyToKeyInput(input: string, key: InkKey): KeyInput {
+  if (key.upArrow) return { name: 'up', ctrl: key.ctrl, sequence: input };
+  if (key.downArrow) return { name: 'down', ctrl: key.ctrl, sequence: input };
+  if (key.leftArrow) return { name: 'left', ctrl: key.ctrl, sequence: input };
+  if (key.rightArrow) return { name: 'right', ctrl: key.ctrl, sequence: input };
+  if (key.return) return { name: 'return', ctrl: key.ctrl, sequence: input };
+  if (key.escape) return { name: 'escape', ctrl: key.ctrl, sequence: input };
+  if (key.backspace || key.delete) return { name: 'backspace', ctrl: key.ctrl, sequence: input };
+  return { name: input, ctrl: key.ctrl, sequence: input };
 }
 
 function isPrintable(seq: string): boolean {
