@@ -1,3 +1,4 @@
+import React from 'react';
 import { useEffect, useReducer, useRef } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import type { Mission } from '@flota/kernel';

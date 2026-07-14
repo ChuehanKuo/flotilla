@@ -1,3 +1,4 @@
+import React from 'react';
 import { Text } from 'ink';
 import type { EscalationView } from '@flota/kernel';
 import type { UiState } from '../viewModel.js';

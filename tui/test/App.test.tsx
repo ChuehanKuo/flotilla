@@ -1,3 +1,4 @@
+import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { Mission, defaultConfig, type TurnDriver, type TurnInput, type TurnOutput } from '@flota/kernel';

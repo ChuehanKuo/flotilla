@@ -1,3 +1,4 @@
+import React from 'react';
 import { Box, Text } from 'ink';
 import type { NodeRow } from '../viewModel.js';
 
