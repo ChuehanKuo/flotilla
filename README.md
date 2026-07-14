@@ -1,6 +1,6 @@
 # Flota
 
-**Status: v0.2 (kernel + CLI + full-screen TUI).** Design spec: [docs/specs/2026-07-13-flota-design.md](docs/specs/2026-07-13-flota-design.md) · Tauri desktop observatory app is the next phase.
+**Status: v0.4 (kernel + CLI + full-screen TUI + Tauri desktop observatory).** Design spec: [docs/specs/2026-07-13-flota-design.md](docs/specs/2026-07-13-flota-design.md).
 
 An event-sourced coordination kernel for hierarchical, multi-provider AI agent fleets — plus a persistent desktop observatory to watch and steer them live. For anyone running multi-agent work, on any terminal and any OS (macOS is the current reference platform).
 
@@ -69,6 +69,34 @@ a blocking terminal prompt for escalations — exact same behavior, unchanged.
 log (same renderer as `replay`, but also accepts a mission directory). Live
 read-only attach to an in-progress mission is a v0.2-later follow-up — to
 watch a mission live today, run it with `flota run` (no `--headless`).
+
+## The Observatory (Tauri desktop app)
+
+A persistent native desktop app that renders a fleet as a live animated
+graph: nodes colored by task state (grey submitted, teal working with a
+sonar-ping pulse, amber input-required, green completed, red failed), the
+captain marked with a gold anchor, a driver badge and live running cost on
+every node, edges that animate as messages route between parent and child,
+and a header showing mission id, status, node count, and total cost — with
+an amber banner surfacing any open escalation. Click a node to open the
+inspector: its message/usage/task-state feed, color-tagged by event kind.
+
+It reads state the same way the TUI does — folding `missions/<id>/events.jsonl`
+through the kernel's own `reduce()` — so the graph can never drift from
+reality. Read-only in v0.4 (it watches; steering from the app is a v0.4.1
+follow-up).
+
+```bash
+npm run tauri dev -w observatory     # native window, dev build, hot reload
+npm run tauri build -w observatory   # produces the shippable macOS .app
+```
+
+The dev window auto-follows the newest mission under `missions/` as it runs
+(no mission id to pass — start a mission with `flota run` in another
+terminal and the graph animates live). A plain browser preview also exists
+for frontend-only iteration (`npm run dev -w observatory`, replays a bundled
+log or `?live=1` against the dev bridge) but the shipped artifact is the
+Tauri app, not the browser tab.
 
 ## Bring your own agent CLI
 

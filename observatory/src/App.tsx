@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ReactFlow, Background, Controls, Handle, Position, type Node, type Edge, type NodeProps } from '@xyflow/react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { ReactFlow, Background, Controls, Handle, Position, MarkerType, type Node, type Edge, type NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import './theme.css';
 // WHY a deep import, not the '@flota/kernel' barrel: index.ts also re-exports
 // EventLog/Mission/providers, which pull in node:fs, node:crypto, and express
 // — fine for the Node-hosted TUI/CLI, but unbundlable for a browser build.
@@ -22,47 +23,75 @@ import {
   type EventSourceMessage,
 } from './eventSource.js';
 
+// State colors double as the semantic legend across the node, the edges it
+// touches, and the inspector feed tags — one palette, three places, so the
+// meaning of a color never has to be relearned per-panel.
 const STATE_COLOR: Record<string, string> = {
-  submitted: '#6b7280',
-  working: '#3b82f6',
-  'input-required': '#d97706',
-  completed: '#16a34a',
-  failed: '#dc2626',
-  canceled: '#6b7280',
-  rejected: '#dc2626',
+  submitted: 'var(--state-submitted)',
+  working: 'var(--state-working)',
+  'input-required': 'var(--state-input-required)',
+  completed: 'var(--state-completed)',
+  failed: 'var(--state-failed)',
+  canceled: 'var(--state-canceled)',
+  rejected: 'var(--state-rejected)',
 };
 
 function FleetNodeView({ data, selected }: NodeProps) {
   const d = data as unknown as GraphNode;
-  const color = STATE_COLOR[d.state] ?? '#6b7280';
+  const color = STATE_COLOR[d.state] ?? STATE_COLOR.submitted;
+  const classes = [
+    'fleet-node',
+    d.isCaptain ? 'fleet-node--captain' : '',
+    d.state === 'input-required' ? 'fleet-node--input-required' : '',
+    selected ? 'fleet-node--selected' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
   return (
-    <div
-      style={{
-        border: `2px solid ${selected ? '#f8fafc' : color}`,
-        background: '#111827',
-        borderRadius: 10,
-        padding: '8px 12px',
-        minWidth: 160,
-        color: '#e5e7eb',
-        fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-        boxShadow: d.state === 'working' ? `0 0 14px ${color}` : 'none',
-      }}
-    >
+    <div className={classes} style={{ '--node-color': color } as CSSProperties}>
+      {d.state === 'working' ? <div className="fleet-node__pulse" /> : null}
       <Handle type="target" position={Position.Top} style={{ background: color, border: 'none' }} />
-      <div style={{ fontWeight: 600, fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
-        {d.isCaptain ? <span title="captain">⚑</span> : null}
+      <div className="fleet-node__title">
+        {d.isCaptain ? (
+          <span className="fleet-node__anchor" title="captain — reports to the operator">
+            ⚓
+          </span>
+        ) : null}
         {d.label}
       </div>
-      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
-        {d.driver || 'driver?'} · <span style={{ color }}>{d.state}</span>
+      <div className="fleet-node__meta">
+        <span className="fleet-node__state-dot" />
+        {d.state}
+        <span className="fleet-node__driver-badge">{d.driver || 'driver?'}</span>
       </div>
-      <div style={{ fontSize: 11, color: '#9ca3af' }}>${d.costUsd.toFixed(4)}</div>
+      <div className="fleet-node__cost">${d.costUsd.toFixed(4)}</div>
       <Handle type="source" position={Position.Bottom} style={{ background: color, border: 'none' }} />
     </div>
   );
 }
 
 const nodeTypes = { fleet: FleetNodeView };
+
+// Inspector feed lines are plain strings from graph.ts's nodeFeed (kept pure
+// and untagged there); the "[TAG] ..." prefix is parsed here purely for
+// presentation so the color legend covers the log too without teaching
+// graph.ts anything about rendering.
+const FEED_TAG_COLOR: Record<string, string> = {
+  ORDER: 'var(--state-working)',
+  INSTRUCT: 'var(--captain-gold)',
+  REPORT: 'var(--state-working)',
+  DELIVER: 'var(--state-completed)',
+  ESCALATE: 'var(--state-input-required)',
+  usage: 'var(--captain-gold)',
+  task: 'var(--text-dim)',
+};
+
+function feedLineParts(line: string): { tag?: string; color: string; rest: string } {
+  const m = /^\[(\w+)\]\s?(.*)$/.exec(line);
+  if (!m) return { color: 'var(--text-dim)', rest: line };
+  const tag = m[1];
+  return { tag, color: FEED_TAG_COLOR[tag] ?? 'var(--text-dim)', rest: m[2] };
+}
 
 async function loadEvents(url: string): Promise<FleetEvent[]> {
   const res = await fetch(url);
@@ -182,125 +211,173 @@ export function App() {
       source: e.source,
       target: e.target,
       animated: e.animating,
-      style: { stroke: e.animating ? '#38bdf8' : '#4b5563', strokeWidth: e.animating ? 3 : 1.5 },
+      style: {
+        stroke: e.animating ? 'var(--state-working)' : 'var(--line-bright)',
+        strokeWidth: e.animating ? 2.5 : 1.5,
+      },
+      markerEnd: { type: MarkerType.ArrowClosed, color: e.animating ? 'var(--state-working)' : 'var(--line-bright)', width: 16, height: 16 },
     }));
     return { nodes, edges };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fleetState, recentEvent, selectedNodeId]);
 
   const feed = selectedNodeId ? nodeFeed(slice, selectedNodeId) : [];
+  const selectedNode = selectedNodeId ? (flowNodes.find(n => n.id === selectedNodeId)?.data as GraphNode | undefined) : undefined;
+  const nodeCount = Object.keys(fleetState.nodes).length;
+  const escalations = fleetState.openEscalations;
 
   return (
-    <div style={{ display: 'flex', height: '100%', width: '100%', background: '#0b0f14', color: '#e5e7eb' }}>
-      <div style={{ flex: 1, position: 'relative' }}>
+    <div style={{ display: 'flex', height: '100%', width: '100%' }}>
+      <div className="flota-canvas" style={{ flex: 1, position: 'relative' }}>
         <ReactFlow nodes={flowNodes} edges={flowEdges} nodeTypes={nodeTypes} onNodeClick={(_, n) => setSelectedNodeId(n.id)} fitView fitViewOptions={{ padding: 0.3 }}>
-          <Background color="#1f2937" gap={24} />
-          <Controls />
+          <Background color="var(--line)" gap={26} size={1} />
+          <Controls showInteractive={false} />
         </ReactFlow>
 
-        <div
-          style={{
-            position: 'absolute',
-            top: 12,
-            left: 12,
-            right: 12,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            background: 'rgba(17,24,39,0.85)',
-            border: '1px solid #1f2937',
-            borderRadius: 10,
-            padding: '8px 12px',
-            fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-            fontSize: 13,
-          }}
-        >
-          <strong>flota observatory</strong>
-          {mode === 'live' || mode === 'tauri' ? (
-            <span
-              title={`connection: ${connectionStatus}`}
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: 0.5,
-                color: connectionStatus === 'open' ? '#16a34a' : connectionStatus === 'error' ? '#dc2626' : '#d97706',
-                border: `1px solid currentColor`,
-                borderRadius: 999,
-                padding: '2px 8px',
-              }}
-            >
-              ● {connectionStatus === 'open' ? (mode === 'tauri' ? 'NATIVE' : 'LIVE') : connectionStatus.toUpperCase()}
+        <div className="flota-header">
+          <div className="flota-header__bar">
+            <span className="flota-header__brand">
+              <span className="anchor">⚓</span>
+              flota observatory
             </span>
-          ) : null}
-          <span style={{ color: '#9ca3af' }}>
-            {fleetState.missionId || missionLabel || '—'} · {fleetState.status} · ${fleetState.totalCostUsd.toFixed(4)}
-          </span>
-          <span style={{ flex: 1 }} />
-          {loadError ? <span style={{ color: '#dc2626' }}>{loadError}</span> : null}
-          {mode === 'replay' ? (
-            <>
-              <button onClick={() => setReplayCursor(0)} disabled={events.length === 0}>
-                ⏮
-              </button>
-              <button onClick={() => setPlaying(p => !p)} disabled={events.length === 0}>
-                {playing ? '⏸ pause' : '▶ play'}
-              </button>
-              <button
-                onClick={() => setReplayCursor(c => Math.min(c + 1, events.length - 1))}
-                disabled={events.length === 0 || replayCursor >= events.length - 1}
-              >
-                step ⏭
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={Math.max(events.length - 1, 0)}
-                value={Math.max(replayCursor, 0)}
-                onChange={e => {
-                  setPlaying(false);
-                  setReplayCursor(Number(e.target.value));
+            <div className="flota-header__divider" />
+            <span className="flota-header__mission">
+              mission <strong>{fleetState.missionId || missionLabel || '—'}</strong>
+            </span>
+            <span
+              className="status-pill"
+              style={{ color: STATE_COLOR[fleetState.status === 'running' ? 'working' : fleetState.status] ?? STATE_COLOR.submitted }}
+            >
+              {fleetState.status}
+            </span>
+            {mode === 'live' || mode === 'tauri' ? (
+              <span
+                className="status-pill"
+                title={`connection: ${connectionStatus}`}
+                style={{
+                  color:
+                    connectionStatus === 'open'
+                      ? 'var(--state-completed)'
+                      : connectionStatus === 'error'
+                        ? 'var(--state-failed)'
+                        : 'var(--state-input-required)',
                 }}
-                style={{ width: 220 }}
-              />
-              <span style={{ color: '#9ca3af', minWidth: 60 }}>
-                {Math.max(replayCursor + 1, 0)}/{events.length}
+              >
+                ● {connectionStatus === 'open' ? (mode === 'tauri' ? 'native' : 'live') : connectionStatus}
               </span>
-            </>
-          ) : (
-            <span style={{ color: '#9ca3af', minWidth: 60 }}>{events.length} events</span>
-          )}
+            ) : null}
+            <span className="flota-header__spacer" />
+            {loadError ? <span className="flota-header__error">{loadError}</span> : null}
+            <span className="flota-header__stat">
+              <strong>{nodeCount}</strong> node{nodeCount === 1 ? '' : 's'}
+            </span>
+            <span className="flota-header__stat">
+              <strong>${fleetState.totalCostUsd.toFixed(4)}</strong>
+            </span>
+            {mode === 'replay' ? (
+              <>
+                <button className="flota-transport-btn" onClick={() => setReplayCursor(0)} disabled={events.length === 0}>
+                  ⏮
+                </button>
+                <button className="flota-transport-btn" onClick={() => setPlaying(p => !p)} disabled={events.length === 0}>
+                  {playing ? '⏸ pause' : '▶ play'}
+                </button>
+                <button
+                  className="flota-transport-btn"
+                  onClick={() => setReplayCursor(c => Math.min(c + 1, events.length - 1))}
+                  disabled={events.length === 0 || replayCursor >= events.length - 1}
+                >
+                  step ⏭
+                </button>
+                <input
+                  className="flota-scrub"
+                  type="range"
+                  min={0}
+                  max={Math.max(events.length - 1, 0)}
+                  value={Math.max(replayCursor, 0)}
+                  onChange={e => {
+                    setPlaying(false);
+                    setReplayCursor(Number(e.target.value));
+                  }}
+                  style={{ width: 200 }}
+                />
+                <span className="flota-header__stat">
+                  {Math.max(replayCursor + 1, 0)}/{events.length}
+                </span>
+              </>
+            ) : (
+              <span className="flota-header__stat">{events.length} events</span>
+            )}
+          </div>
+
+          {escalations.length > 0 ? (
+            <div className="escalation-banner" onClick={() => setSelectedNodeId(escalations[0].from)} title="click to inspect the escalating node">
+              <span className="escalation-banner__count">
+                ⚠ {escalations.length} escalation{escalations.length === 1 ? '' : 's'} waiting on you
+              </span>
+              <span style={{ color: 'var(--text-dim)' }}>
+                {escalations
+                  .slice(0, 2)
+                  .map(esc => `${esc.from}: “${esc.text}”`)
+                  .join('  ·  ')}
+                {escalations.length > 2 ? '  ·  …' : ''}
+              </span>
+            </div>
+          ) : null}
         </div>
       </div>
 
-      <div
-        style={{
-          width: 340,
-          borderLeft: '1px solid #1f2937',
-          padding: 12,
-          overflowY: 'auto',
-          fontFamily: 'ui-monospace, monospace',
-          fontSize: 12,
-        }}
-      >
-        <div style={{ fontFamily: 'ui-sans-serif, system-ui, sans-serif', fontWeight: 600, marginBottom: 8 }}>
-          {selectedNodeId ? `inspector — ${selectedNodeId}` : 'select a node'}
-        </div>
-        {selectedNodeId ? (
-          feed.length > 0 ? (
-            feed.map((line, i) => (
-              <div key={i} style={{ marginBottom: 6, color: '#d1d5db', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                {line}
+      <div className="inspector">
+        <div className="inspector__header">
+          <div className="inspector__title">{selectedNodeId ? 'inspector' : 'fleet'}</div>
+          {selectedNode ? (
+            <>
+              <div className="inspector__node-name">
+                {selectedNode.isCaptain ? '⚓ ' : ''}
+                {selectedNode.label}
               </div>
-            ))
+              <div className="inspector__node-meta">
+                <span className="status-pill" style={{ color: STATE_COLOR[selectedNode.state] ?? STATE_COLOR.submitted, fontSize: 9 }}>
+                  {selectedNode.state}
+                </span>
+                <span className="fleet-node__driver-badge">{selectedNode.driver || 'driver?'}</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                  ${selectedNode.costUsd.toFixed(4)}
+                </span>
+              </div>
+            </>
           ) : (
-            <div style={{ color: '#6b7280' }}>no events yet at this cursor position</div>
-          )
-        ) : (
-          <div style={{ color: '#6b7280' }}>
-            click a node to inspect its message/usage feed (
-            {mode === 'tauri' ? 'native: Rust file-watch' : mode === 'live' ? `live: ${bridgeUrl}` : `log: ${logUrl}`})
-          </div>
-        )}
+            <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 2 }}>select a node to inspect its feed</div>
+          )}
+        </div>
+        <div className="inspector__feed">
+          {selectedNodeId ? (
+            feed.length > 0 ? (
+              feed.map((line, i) => {
+                const { tag, color, rest } = feedLineParts(line);
+                return (
+                  <div key={i} className="inspector__line">
+                    {tag ? (
+                      <span className="inspector__tag" style={{ color, border: `1px solid ${color}` }}>
+                        {tag}
+                      </span>
+                    ) : null}
+                    <span>{rest}</span>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="inspector__empty">no events yet at this cursor position</div>
+            )
+          ) : (
+            <div className="inspector__empty">
+              click a node in the fleet to see its message/usage feed.
+              <br />
+              <br />
+              source: {mode === 'tauri' ? 'native — Rust file-watch' : mode === 'live' ? `live — ${bridgeUrl}` : `replay — ${logUrl}`}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
