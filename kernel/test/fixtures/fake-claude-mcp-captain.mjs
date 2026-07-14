@@ -37,7 +37,9 @@ function flagValue(name) {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-const mcpConfig = JSON.parse(flagValue('--mcp-config'));
+// --mcp-config now carries a FILE PATH (driver writes the config to a 0600
+// temp file, token-out-of-argv fix) — read the file instead of parsing argv.
+const mcpConfig = JSON.parse(readFileSync(flagValue('--mcp-config'), 'utf8'));
 const flota = mcpConfig.mcpServers.flota;
 const token = (flota.headers?.Authorization ?? '').replace(/^Bearer\s+/i, '');
 const isResume = args.includes('--resume');

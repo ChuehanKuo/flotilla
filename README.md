@@ -29,12 +29,16 @@ npx tsx cli/src/index.ts run "your mission order here" --headless
 npx tsx cli/src/index.ts watch missions/<mission-id>
 ```
 
-**Drivers.** `claude-code` (default) is the proven path. `codex` (OpenAI's
-Codex CLI) is **experimental** — the driver exists and is unit-tested, but
-hangs on live contact pending real-CLI hardening; opt in per node at your own
-risk. `api` (raw Anthropic/OpenAI keys) is fully supported: point a node's
-config at it and export `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` — the hard
-dollar cap applies there (`--budget`, default $5). `custom` lets you point a
+**Drivers.** `claude-code` (default) is the proven path — captains and crew
+delegate, report, and deliver as real MCP tool calls (`mcp__flota__*`)
+against an in-process MCP server, live-verified end-to-end (3/3 headless
+runs). `codex` (OpenAI's Codex CLI) is **experimental** — v0.3 rebuilt it on
+the same MCP wiring (`McpCodexDriver`) and it's unit-tested, but not yet
+live-verified against the real `codex` binary; opt in per node at your own
+risk pending that verification run. `api` (raw Anthropic/OpenAI keys) is fully
+supported: point a node's config at it and export `ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY` — the hard dollar cap applies there (`--budget`, default
+$5). `custom` lets you point a
 node at any agent CLI you already have installed (see "Bring your own agent
 CLI" below). Subscription nodes are bounded by per-node turn caps, depth
 caps, a watchdog, and mission timeouts.

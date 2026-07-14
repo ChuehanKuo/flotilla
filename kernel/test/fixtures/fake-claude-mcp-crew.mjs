@@ -5,7 +5,7 @@
 // (proving the crew's own token/role-gating works, not just the captain's)
 // and end its own task. Never resumed in this test (once delivered, the
 // task is terminal and the kernel never routes another ORDER to this node).
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
@@ -19,7 +19,9 @@ function flagValue(name) {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-const mcpConfig = JSON.parse(flagValue('--mcp-config'));
+// --mcp-config now carries a FILE PATH (driver writes the config to a 0600
+// temp file, token-out-of-argv fix) — read the file instead of parsing argv.
+const mcpConfig = JSON.parse(readFileSync(flagValue('--mcp-config'), 'utf8'));
 const flota = mcpConfig.mcpServers.flota;
 const token = (flota.headers?.Authorization ?? '').replace(/^Bearer\s+/i, '');
 const promptText = args[1]; // args = ['-p', promptText, ...]

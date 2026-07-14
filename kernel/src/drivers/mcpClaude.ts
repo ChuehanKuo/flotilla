@@ -1,5 +1,8 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { TurnDriver, TurnInput, TurnOutput } from '../driver.js';
 
 const execFile = promisify(execFileCb);
@@ -199,8 +202,32 @@ export function parseMcpClaudeStdout(stdout: string): ParsedMcpTurn {
 export class McpClaudeDriver implements TurnDriver {
   private sessionId: string | undefined;
   private events: McpToolEvent[] = [];
+  private readonly mcpConfigDir: string;
+  private readonly mcpConfigPath: string;
 
-  constructor(private readonly opts: McpClaudeDriverOptions) {}
+  constructor(private readonly opts: McpClaudeDriverOptions) {
+    // WHY a per-instance temp FILE, not the inline JSON string on argv: `ps`/
+    // process listings show every process's full argv to any other user on
+    // the box — putting `--mcp-config '{...Authorization:Bearer <token>...}'`
+    // there leaked the bearer token to anyone who could run `ps aux`. claude
+    // --help confirms `--mcp-config <configs...>` "Load MCP servers from JSON
+    // FILES or strings" — a path works exactly like inline JSON. Written once
+    // eagerly here (url/token never change across a node's turns), mirroring
+    // McpCodexDriver's eager per-instance CODEX_HOME. Mode 0600 so only the
+    // owning user can read the token off disk either.
+    this.mcpConfigDir = mkdtempSync(join(tmpdir(), 'flota-mcp-claude-cfg-'));
+    this.mcpConfigPath = join(this.mcpConfigDir, 'mcp-config.json');
+    const mcpConfig = JSON.stringify({
+      mcpServers: {
+        flota: {
+          type: 'http',
+          url: this.opts.mcpUrl,
+          headers: { Authorization: `Bearer ${this.opts.token}` },
+        },
+      },
+    });
+    writeFileSync(this.mcpConfigPath, mcpConfig, { mode: 0o600 });
+  }
 
   // WHY exposed alongside onToolEvent: a caller that didn't pass onToolEvent
   // (e.g. a test) still needs a way to inspect what tool calls happened this
@@ -212,16 +239,6 @@ export class McpClaudeDriver implements TurnDriver {
   async turn(input: TurnInput): Promise<TurnOutput> {
     const isFirstTurn = this.sessionId === undefined;
 
-    const mcpConfig = JSON.stringify({
-      mcpServers: {
-        flota: {
-          type: 'http',
-          url: this.opts.mcpUrl,
-          headers: { Authorization: `Bearer ${this.opts.token}` },
-        },
-      },
-    });
-
     // WHY --mcp-config + --allowedTools repeated on resume: the spike found
     // neither is remembered across --resume — omitting them on turn 2+ would
     // silently strip the agent's only tools mid-mission.
@@ -231,7 +248,7 @@ export class McpClaudeDriver implements TurnDriver {
 
     const args = [
       '-p', input.newText,
-      '--mcp-config', mcpConfig,
+      '--mcp-config', this.mcpConfigPath,
       '--strict-mcp-config',
       '--allowedTools', 'mcp__flota__*',
       '--output-format', 'stream-json',
@@ -244,10 +261,11 @@ export class McpClaudeDriver implements TurnDriver {
     // fenced-JSON queue entirely — tool results already fed back into the
     // agent's own loop over HTTP during the run, nothing to re-inject next turn.
     // WHY the try/catch here (unlike CliDriver): a failed execFile rejects with
-    // Error.message and Error.cmd containing the FULL argv — including the
-    // `--mcp-config` JSON with the node's bearer token. node.ts does
-    // onModelFailure(id, String(err)), which would land the token verbatim in
-    // the event log and any escalation. Redact it before it propagates.
+    // Error.message and Error.cmd containing the FULL argv. The bearer token
+    // itself is no longer there (it lives only in the 0600 mcp-config file,
+    // referenced by path) but the redact/scrub stays as defense-in-depth —
+    // cheap, and node.ts does onModelFailure(id, String(err)), which would
+    // land whatever's in the error verbatim in the event log and any escalation.
     let stdout: string;
     try {
       ({ stdout } = await execFile(this.opts.bin ?? 'claude', args, {
@@ -289,14 +307,16 @@ export class McpClaudeDriver implements TurnDriver {
     };
   }
 
-  // WHY redact both the raw token AND the whole --mcp-config JSON: execFile's
-  // rejection stringifies the entire argv into err.message and err.cmd, so the
-  // token appears both bare (inside the Bearer header) and embedded in the
-  // JSON blob. Replacing the token string alone leaves the surrounding config
-  // (url, header structure) exposed and risks a partial match; replacing the
-  // literal mcp-config value the driver built guarantees the token can't
-  // survive in either field. Mutates a shallow-cloned Error so the original
-  // stack is preserved for debugging.
+  // WHY scrub message, cmd, AND stack: execFile's rejection stringifies the
+  // entire argv into err.message and err.cmd — the token no longer appears
+  // there directly (argv now carries the mcp-config FILE PATH, not inline
+  // JSON with the token), but the path itself is still sensitive-adjacent and
+  // this scrub is cheap defense-in-depth regardless of what's in argv. stack
+  // needs its own pass: Node bakes the message (whatever it was at
+  // construction time) into err.stack when the Error is constructed, so
+  // mutating .message alone leaves the pre-mutation string sitting in .stack.
+  // Mutates the Error in place (not a clone) — .stack after this call is the
+  // scrubbed version, which is what we want everywhere this error is logged.
   private redactToken(err: unknown): unknown {
     if (!(err instanceof Error)) return err;
     const token = this.opts.token;
@@ -305,6 +325,17 @@ export class McpClaudeDriver implements TurnDriver {
     err.message = scrub(err.message);
     const cmd = (err as { cmd?: unknown }).cmd;
     if (typeof cmd === 'string') (err as { cmd?: string }).cmd = scrub(cmd);
+    if (typeof err.stack === 'string') err.stack = scrub(err.stack);
     return err;
+  }
+
+  // WHY cleanup(): the mission's finish() sweep (kernel.ts) duck-types
+  // cleanup() on every driver it holds — this removes the per-node temp dir
+  // (and the 0600 mcp-config file inside it, which carries the bearer token)
+  // at mission end, mirroring McpCodexDriver's CODEX_HOME cleanup. No wiring
+  // needed beyond adding this method: the sweep already iterates every driver
+  // in the map and calls cleanup() if present, best-effort.
+  cleanup(): void {
+    rmSync(this.mcpConfigDir, { recursive: true, force: true });
   }
 }

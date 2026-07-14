@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -94,13 +94,27 @@ describe('McpClaudeDriver', () => {
     // (d) session_id + usage parsed off the result event.
     expect(out.usage).toEqual({ inputTokens: 42, outputTokens: 7 });
 
-    // First-turn argv: --mcp-config carrying the real url + bearer token,
-    // --strict-mcp-config, --allowedTools scoped to mcp__flota__*,
-    // --append-system-prompt carrying MCP_TOOL_GUIDANCE, no --resume.
+    // First-turn argv: --mcp-config carrying a FILE PATH (not inline JSON —
+    // token-out-of-argv fix), --strict-mcp-config, --allowedTools scoped to
+    // mcp__flota__*, --append-system-prompt carrying MCP_TOOL_GUIDANCE, no
+    // --resume.
     const [args] = readLog(logFile);
+    const mcpConfigIdx = args.indexOf('--mcp-config');
+    expect(mcpConfigIdx).toBeGreaterThanOrEqual(0);
+    const mcpConfigPath = args[mcpConfigIdx + 1];
+    // The value at --mcp-config is a filesystem path, not inline JSON — the
+    // bearer token must never appear in argv itself.
+    expect(mcpConfigPath).not.toContain(token);
+    expect(() => JSON.parse(mcpConfigPath)).toThrow(); // not itself parseable JSON
+    // The file at that path holds the real config, mode 0600 (owner-only).
+    expect(JSON.parse(readFileSync(mcpConfigPath, 'utf8'))).toEqual({
+      mcpServers: { flota: { type: 'http', url, headers: { Authorization: `Bearer ${token}` } } },
+    });
+    expect(statSync(mcpConfigPath).mode & 0o777).toBe(0o600);
+
     expect(args).toEqual([
       '-p', '[TASK from operator · task t1] scan the repo',
-      '--mcp-config', JSON.stringify({ mcpServers: { flota: { type: 'http', url, headers: { Authorization: `Bearer ${token}` } } } }),
+      '--mcp-config', mcpConfigPath,
       '--strict-mcp-config',
       '--allowedTools', 'mcp__flota__*',
       '--output-format', 'stream-json',
@@ -108,6 +122,7 @@ describe('McpClaudeDriver', () => {
       '--append-system-prompt', `You are captain.\n\n${MCP_TOOL_GUIDANCE}`,
     ]);
     expect(args).not.toContain('--resume');
+    driver.cleanup();
   });
 
   it('second turn: --resume replaces --append-system-prompt, --mcp-config and --allowedTools still re-passed', async () => {
@@ -124,10 +139,17 @@ describe('McpClaudeDriver', () => {
     // delegate fired twice — once per turn, each a real round trip.
     expect(api.delegate).toHaveBeenCalledTimes(2);
 
-    const [, args2] = readLog(logFile);
+    const [args1, args2] = readLog(logFile);
+    // WHY reuse the FIRST turn's --mcp-config path, not re-derive one: the
+    // driver writes the config file once in the constructor — the same path
+    // must be re-passed on resume (same file, still on disk).
+    const mcpConfigPath = args1[args1.indexOf('--mcp-config') + 1];
+    expect(JSON.parse(readFileSync(mcpConfigPath, 'utf8'))).toEqual({
+      mcpServers: { flota: { type: 'http', url, headers: { Authorization: `Bearer ${token}` } } },
+    });
     expect(args2).toEqual([
       '-p', 'turn two',
-      '--mcp-config', JSON.stringify({ mcpServers: { flota: { type: 'http', url, headers: { Authorization: `Bearer ${token}` } } } }),
+      '--mcp-config', mcpConfigPath,
       '--strict-mcp-config',
       '--allowedTools', 'mcp__flota__*',
       '--output-format', 'stream-json',
@@ -135,6 +157,7 @@ describe('McpClaudeDriver', () => {
       '--resume', 'sess-mcp-1',
     ]);
     expect(args2).not.toContain('--append-system-prompt');
+    driver.cleanup();
   });
 
   it('crew token: report tool round-trips too (not just delegate)', async () => {
@@ -204,7 +227,10 @@ describe('McpClaudeDriver', () => {
     const token = server.registerNode(ctx);
 
     // A stub that exits non-zero: execFile rejects with Error.message/.cmd
-    // carrying the full argv, including the --mcp-config JSON with the token.
+    // carrying the full argv. Post token-out-of-argv fix, argv only ever
+    // holds the mcp-config FILE PATH, not the token — so this is really a
+    // regression guard (the token must never reappear in argv) rather than
+    // a redaction-in-action test; see the next test for that.
     const failBin = join(workspaceDir, 'failing-claude.sh');
     writeFileSync(failBin, '#!/usr/bin/env bash\nexit 1\n', { mode: 0o755 });
     const driver = new McpClaudeDriver({ workspaceDir, mcpUrl: url, token, bin: failBin });
@@ -222,7 +248,36 @@ describe('McpClaudeDriver', () => {
     expect(token.length).toBeGreaterThan(0);
     expect(e.message).not.toContain(token);
     expect(e.cmd ?? '').not.toContain(token);
-    expect(e.message).toContain('<redacted>'); // proves redaction ran, not just an absent token
+    expect(e.stack ?? '').not.toContain(token);
+    driver.cleanup();
+  });
+
+  it('redacts the token from err.stack, not just err.message/err.cmd (defense-in-depth)', () => {
+    // WHY synthesize the error rather than drive a real failing execFile: with
+    // the token out of argv (Fix 1), a real execFile rejection no longer puts
+    // the token in message/cmd/stack at all, so there's nothing there to prove
+    // redaction ACTUALLY scrubs stack (as opposed to stack simply never having
+    // had the token). This pins redactToken's own contract directly: given an
+    // Error whose .stack was baked (by Node, at construction time) from a
+    // message that contained the token — the realistic shape of the bug this
+    // fix closes — scrub() must strip the token from .stack too.
+    const api = fakeApi();
+    const ctx: McpNodeContext = { nodeId: 'captain', role: 'captain', api, taskId: 't1' };
+    const token = server.registerNode(ctx);
+    const driver = new McpClaudeDriver({ workspaceDir, mcpUrl: url, token, bin: FIXTURE });
+
+    const err = new Error(`Command failed: claude --mcp-config /tmp/x --header "Bearer ${token}"`);
+    // Node bakes .message into .stack at construction — reproduce that here
+    // rather than relying on the engine to do it, since we're not actually
+    // throwing this Error through V8's real construction path.
+    err.stack = `Error: Command failed: claude --mcp-config /tmp/x --header "Bearer ${token}"\n    at fake.js:1:1`;
+
+    const redacted = (driver as unknown as { redactToken: (e: unknown) => Error }).redactToken(err);
+
+    expect(redacted.message).not.toContain(token);
+    expect(redacted.stack).not.toContain(token);
+    expect(redacted.stack).toContain('<redacted>');
+    driver.cleanup();
   });
 
   it('parser: a tool_result with is_error:true yields isError:true', () => {

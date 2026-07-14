@@ -2,9 +2,11 @@
 // Stub for `claude` used by McpClaudeDriver tests. Never invokes the real CLI.
 // Unlike fake-claude.sh (which just echoes a canned reply), this stub ACTUALLY
 // round-trips through a real (test-hosted) FlotaMcpServer: it reads its own
-// --mcp-config argv, extracts the flota server's url + bearer token, opens a
-// real MCP client connection, and calls the delegate tool for real — proving
-// the driver wired the server+token into the argv correctly end-to-end.
+// --mcp-config argv (a FILE PATH — the driver writes the config to a 0600
+// temp file and passes the path, keeping the bearer token out of argv), reads
+// that file to get the flota server's url + bearer token, opens a real MCP
+// client connection, and calls the delegate tool for real — proving the
+// driver wired the server+token into the config file correctly end-to-end.
 //
 // Appends its argv (as one JSON array line) to $FAKE_CLI_LOG, same convention
 // as fake-claude.sh/fake-codex.sh, so tests can assert on the exact args a
@@ -14,7 +16,7 @@
 // .superpowers/sdd/mcp-spike-findings.md §3: a tool_use event, a tool_result
 // event carrying the server's actual response text, a final assistant text
 // event, and a result event with session_id + usage.
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
@@ -29,14 +31,14 @@ function flagValue(name) {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-const mcpConfigRaw = flagValue('--mcp-config');
-if (!mcpConfigRaw) {
+const mcpConfigPath = flagValue('--mcp-config');
+if (!mcpConfigPath) {
   // No --mcp-config to round-trip through (e.g. an argv-shape-only probe) —
   // nothing more to do.
   process.exit(0);
 }
 
-const mcpConfig = JSON.parse(mcpConfigRaw);
+const mcpConfig = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
 const flota = mcpConfig.mcpServers.flota;
 const authHeader = flota.headers?.Authorization ?? '';
 const token = authHeader.replace(/^Bearer\s+/i, '');
