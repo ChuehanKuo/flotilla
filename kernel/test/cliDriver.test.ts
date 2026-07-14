@@ -26,7 +26,7 @@ function fakeTools(overrides: Partial<Record<'deliver' | 'report' | 'escalate' |
 }
 
 function setup() {
-  const workspaceDir = mkdtempSync(join(tmpdir(), 'flotilla-cli-'));
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'flota-cli-'));
   const logFile = join(workspaceDir, 'log.jsonl');
   const replyFile = join(workspaceDir, 'reply.txt');
   writeFileSync(logFile, '');
@@ -69,7 +69,7 @@ describe('CliDriver (generic spec)', () => {
     delete process.env.FAKE_CLI_REPLY;
   });
 
-  it('drives a two-turn exchange: firstArgs then resumeArgs carrying turn 1 sessionId, executes a flotilla block, bills subscription', async () => {
+  it('drives a two-turn exchange: firstArgs then resumeArgs carrying turn 1 sessionId, executes a flota block, bills subscription', async () => {
     const { workspaceDir, logFile, replyFile } = setup();
     const deliverExec = vi.fn(async (a: any) => `delivered: ${a.text}`);
     const tools = fakeTools({ deliver: deliverExec });
@@ -85,10 +85,10 @@ describe('CliDriver (generic spec)', () => {
       billing: 'subscription',
     });
 
-    // Turn 2: resume, and a flotilla deliver block fires the tool + is stripped.
+    // Turn 2: resume, and a flota deliver block fires the tool + is stripped.
     const reply2 = [
       'Scanning complete.',
-      '```flotilla',
+      '```flota',
       '{"commands":[{"cmd":"deliver","text":"12 metrics found"}]}',
       '```',
     ].join('\n');
@@ -97,7 +97,7 @@ describe('CliDriver (generic spec)', () => {
 
     expect(deliverExec).toHaveBeenCalledWith({ text: '12 metrics found' }, { toolCallId: 'proto', messages: [] });
     expect(out2.text).toBe('Scanning complete.');
-    expect(out2.text).not.toContain('```flotilla');
+    expect(out2.text).not.toContain('```flota');
     expect(out2.billing).toBe('subscription');
 
     const [args1, args2] = readLog(logFile);
@@ -110,7 +110,7 @@ describe('CliDriver (generic spec)', () => {
     const tools = fakeTools({ report: vi.fn(async (a: any) => `reported: ${a.text}`) });
     const driver = new CliDriver(customSpec(), { workspaceDir, bin: FIXTURE });
 
-    writeFileSync(replyFile, 'SESSION=s1\n```flotilla\n{"commands":[{"cmd":"report","text":"halfway"}]}\n```');
+    writeFileSync(replyFile, 'SESSION=s1\n```flota\n{"commands":[{"cmd":"report","text":"halfway"}]}\n```');
     await driver.turn(turnInput(tools, 'start'));
 
     writeFileSync(replyFile, 'done');

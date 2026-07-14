@@ -8,7 +8,7 @@ const opts = { toolCallId: 't', messages: [] as any[] };
 
 describe('file tools sandbox', () => {
   it('writes, lists, reads inside the workspace', async () => {
-    const ws = mkdtempSync(join(tmpdir(), 'flotilla-ws-'));
+    const ws = mkdtempSync(join(tmpdir(), 'flota-ws-'));
     const tools = makeFileTools(ws) as any;
     await tools.write_file.execute({ path: 'notes/a.md', content: 'hello' }, opts);
     const listing = await tools.list_files.execute({}, opts);
@@ -18,7 +18,7 @@ describe('file tools sandbox', () => {
   });
 
   it('rejects path escapes', async () => {
-    const ws = mkdtempSync(join(tmpdir(), 'flotilla-ws-'));
+    const ws = mkdtempSync(join(tmpdir(), 'flota-ws-'));
     const tools = makeFileTools(ws) as any;
     const r1 = await tools.write_file.execute({ path: '../evil.txt', content: 'x' }, opts);
     const r2 = await tools.read_file.execute({ path: '/etc/passwd' }, opts);

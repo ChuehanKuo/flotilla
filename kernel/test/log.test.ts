@@ -27,7 +27,7 @@ describe('EventLog', () => {
   });
 
   it('persists JSONL and round-trips via load', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'flotilla-')), 'events.jsonl');
+    const file = join(mkdtempSync(join(tmpdir(), 'flota-')), 'events.jsonl');
     const log = new EventLog('m-test', file);
     log.append('mission.started', { order: 'scan' });
     log.append('mission.completed', { result: 'ok' });
@@ -38,7 +38,7 @@ describe('EventLog', () => {
   });
 
   it('load skips unparseable lines instead of throwing', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'flotilla-')), 'events.jsonl');
+    const file = join(mkdtempSync(join(tmpdir(), 'flota-')), 'events.jsonl');
     const log = new EventLog('m-test', file);
     log.append('mission.started', { order: 'scan' });
     log.append('mission.completed', { result: 'ok' });

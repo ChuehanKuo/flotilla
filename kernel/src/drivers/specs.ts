@@ -16,7 +16,7 @@ export interface CliTurnCtx {
 }
 
 // The reduction of a subprocess's stdout to what the shared turn loop needs.
-// `transcript` is scanned for the flotilla command block; `displayText` (when
+// `transcript` is scanned for the flota command block; `displayText` (when
 // present) is the clean text shown to the user, distinct from the full
 // multi-turn transcript. `parse` throws on unusable output so the node's
 // retry-then-escalate machinery handles it — never a silently-empty turn.
@@ -105,11 +105,11 @@ function parseClaudeStdout(stdout: string): CliParseResult {
     }
   }
 
-  // WHY join with '\n': FENCE_RE (protocol.ts) requires a flotilla block's
+  // WHY join with '\n': FENCE_RE (protocol.ts) requires a flota block's
   // opening fence to start at a line boundary. Assistant turn texts aren't
   // guaranteed to end with a trailing newline, so concatenating turns with
   // '' could glue one turn's tail directly onto the next turn's leading
-  // ```flotilla and hide a genuine block from the regex.
+  // ```flota and hide a genuine block from the regex.
   const fullTranscript = turnTexts.join('\n');
   const resultText = resultEvent && typeof resultEvent.result === 'string' ? resultEvent.result : undefined;
 
@@ -129,7 +129,7 @@ function parseClaudeStdout(stdout: string): CliParseResult {
 
   // WHY displayText comes from resultText but transcript stays the full stream:
   // headless Claude runs its own internal multi-turn loop and can emit its
-  // flotilla block in an intermediate turn, then narrate in its final turn (the
+  // flota block in an intermediate turn, then narrate in its final turn (the
   // `result` event's text) without repeating the block — CliDriver scans
   // `transcript` for the block (catches it wherever it appeared) but shows
   // `displayText` (the clean final-turn summary) to the user. When there's no

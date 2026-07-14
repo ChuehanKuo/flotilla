@@ -1,4 +1,4 @@
-import type { FleetEvent, FleetState, TaskState } from '@flotilla/kernel';
+import type { FleetEvent, FleetState, TaskState } from '@flota/kernel';
 
 export interface NodeRow {
   id: string;

@@ -49,7 +49,7 @@ function fakeTools(): ToolSet {
 
 describe('realDriverFactory — custom driver kind', () => {
   it('driver:"custom" with a spec yields a CliDriver bound to that spec', async () => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), 'flotilla-custom-'));
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'flota-custom-'));
     const logFile = join(workspaceDir, 'log.jsonl');
     const replyFile = join(workspaceDir, 'reply.txt');
     writeFileSync(logFile, '');

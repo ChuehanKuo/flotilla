@@ -77,7 +77,7 @@ export class CliDriver implements TurnDriver {
     if (result.sessionId) this.sessionId = result.sessionId;
 
     // WHY commands come from transcript but display text from displayText: a CLI
-    // may run its own internal multi-turn loop and emit its flotilla block in an
+    // may run its own internal multi-turn loop and emit its flota block in an
     // intermediate turn, then narrate in its final (display) turn without
     // repeating the block — scanning the whole transcript catches the block
     // wherever it appeared (parseCommands keeps only the LAST block found).

@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import { runMission } from './run.js';
 import { replay } from './replay.js';
 
-const program = new Command('flotilla');
+const program = new Command('flota');
 program.command('run <order>')
   .description('run a mission: a captain decomposes your order across crew agents')
   .option('--budget <usd>', 'hard mission budget cap in USD')

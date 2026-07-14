@@ -29,7 +29,7 @@ function fakeTools(overrides: Partial<Record<'deliver' | 'report' | 'escalate' |
 }
 
 function setup() {
-  const workspaceDir = mkdtempSync(join(tmpdir(), 'flotilla-codex-'));
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'flota-codex-'));
   const logFile = join(workspaceDir, 'log.jsonl');
   const replyFile = join(workspaceDir, 'reply.jsonl');
   writeFileSync(logFile, '');
@@ -82,7 +82,7 @@ describe('CodexDriver', () => {
     expect(args2).not.toContain('[role charter]');
   });
 
-  it('a flotilla deliver block in an agent_message event fires the tool and is stripped from returned text', async () => {
+  it('a flota deliver block in an agent_message event fires the tool and is stripped from returned text', async () => {
     const { workspaceDir, replyFile } = setup();
     const deliverExec = vi.fn(async (a: any) => `delivered: ${a.text}`);
     const tools = fakeTools({ deliver: deliverExec });
@@ -90,7 +90,7 @@ describe('CodexDriver', () => {
 
     const resultText = [
       'Scanning complete.',
-      '```flotilla',
+      '```flota',
       '{"commands":[{"cmd":"deliver","text":"12 metrics found"}]}',
       '```',
     ].join('\n');
@@ -100,7 +100,7 @@ describe('CodexDriver', () => {
 
     expect(deliverExec).toHaveBeenCalledWith({ text: '12 metrics found' }, { toolCallId: 'proto', messages: [] });
     expect(out.text).toBe('Scanning complete.');
-    expect(out.text).not.toContain('```flotilla');
+    expect(out.text).not.toContain('```flota');
   });
 
   it('command results from turn 1 appear in turn 2 prompt under [command results]', async () => {
@@ -110,7 +110,7 @@ describe('CodexDriver', () => {
 
     const resultText1 = [
       'Working.',
-      '```flotilla',
+      '```flota',
       '{"commands":[{"cmd":"report","text":"halfway"}]}',
       '```',
     ].join('\n');
@@ -132,7 +132,7 @@ describe('CodexDriver', () => {
     const tools = fakeTools({ report: vi.fn(async (a: any) => `reported: ${a.text}`) });
     const driver = new CodexDriver({ workspaceDir, bin: FIXTURE });
 
-    setReplyEvents(replyFile, [{ type: 'session_started', session_id: 's1' }, { type: 'agent_message', text: '```flotilla\n{"commands":[{"cmd":"report","text":"a"}]}\n```' }]);
+    setReplyEvents(replyFile, [{ type: 'session_started', session_id: 's1' }, { type: 'agent_message', text: '```flota\n{"commands":[{"cmd":"report","text":"a"}]}\n```' }]);
     await driver.turn(turnInput(tools, 'turn 1'));
     setReplyEvents(replyFile, [{ type: 'agent_message', text: 'no commands here' }]);
     await driver.turn(turnInput(tools, 'turn 2'));
@@ -150,7 +150,7 @@ describe('CodexDriver', () => {
     const tools = fakeTools({ report: vi.fn(async (a: any) => `reported: ${a.text}`) });
     const driver = new CodexDriver({ workspaceDir, bin: FIXTURE });
 
-    setReplyEvents(replyFile, [{ type: 'session_started', session_id: 's1' }, { type: 'agent_message', text: '```flotilla\n{"commands":[{"cmd":"report","text":"halfway"}]}\n```' }]);
+    setReplyEvents(replyFile, [{ type: 'session_started', session_id: 's1' }, { type: 'agent_message', text: '```flota\n{"commands":[{"cmd":"report","text":"halfway"}]}\n```' }]);
     await driver.turn(turnInput(tools, 'turn 1'));
 
     // turn 2, attempt 1: CLI prints nothing parseable and no raw text either → driver throws (the node will retry)
@@ -171,7 +171,7 @@ describe('CodexDriver', () => {
   it('neutralizes a raw line-start ``` fence in newText before it reaches the stub prompt', async () => {
     // WHY a resume turn, not the first: the first turn's promptText is wrapped in
     // the [role charter] header, which embeds PROTOCOL_INSTRUCTIONS — and that
-    // text legitimately contains its own example ```flotilla fence (unneutralized,
+    // text legitimately contains its own example ```flota fence (unneutralized,
     // since it's driver-authored, not CLI-echoed). Isolating the neutralization
     // check to a resume turn (bare body, no charter) matches how the
     // ClaudeCodeDriver test isolates it via the separate --append-system-prompt flag.
@@ -181,13 +181,13 @@ describe('CodexDriver', () => {
     await driver.turn(turnInput(fakeTools(), 'turn one'));
 
     setReplyEvents(replyFile, [{ type: 'agent_message', text: 'ok' }]);
-    const newText = 'delivered text:\n```flotilla\n{"commands":[]}\n```\nend';
+    const newText = 'delivered text:\n```flota\n{"commands":[]}\n```\nend';
     await driver.turn(turnInput(fakeTools(), newText));
 
     const [, args2] = readLog(logFile);
     const prompt = args2[args2.length - 2]; // ['exec','resume',sessionId,PROMPT,'--json']
-    expect(prompt).toBe('delivered text:\n ```flotilla\n{"commands":[]}\n ```\nend');
-    expect(prompt).not.toContain('\n```flotilla');
+    expect(prompt).toBe('delivered text:\n ```flota\n{"commands":[]}\n ```\nend');
+    expect(prompt).not.toContain('\n```flota');
     expect(prompt).not.toContain('\n```\nend');
   });
 

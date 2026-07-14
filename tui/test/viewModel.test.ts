@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EventLog, reduce } from '@flotilla/kernel';
+import { EventLog, reduce } from '@flota/kernel';
 import { fleetRows, nodeFeed, initialUi } from '../src/viewModel.js';
 
 function fleetLog(): EventLog {

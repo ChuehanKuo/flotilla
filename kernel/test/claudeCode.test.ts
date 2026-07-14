@@ -43,7 +43,7 @@ function fakeTools(overrides: Partial<Record<'deliver' | 'report' | 'escalate' |
 }
 
 function setup() {
-  const workspaceDir = mkdtempSync(join(tmpdir(), 'flotilla-cc-'));
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'flota-cc-'));
   const logFile = join(workspaceDir, 'log.jsonl');
   const replyFile = join(workspaceDir, 'reply.ndjson');
   writeFileSync(logFile, '');
@@ -109,7 +109,7 @@ describe('ClaudeCodeDriver', () => {
     ]);
   });
 
-  it('a flotilla deliver block in the reply fires the tool and is stripped from returned text', async () => {
+  it('a flota deliver block in the reply fires the tool and is stripped from returned text', async () => {
     const { workspaceDir, replyFile } = setup();
     const deliverExec = vi.fn(async (a: any) => `delivered: ${a.text}`);
     const tools = fakeTools({ deliver: deliverExec });
@@ -117,7 +117,7 @@ describe('ClaudeCodeDriver', () => {
 
     const resultText = [
       'Scanning complete.',
-      '```flotilla',
+      '```flota',
       '{"commands":[{"cmd":"deliver","text":"12 metrics found"}]}',
       '```',
     ].join('\n');
@@ -127,10 +127,10 @@ describe('ClaudeCodeDriver', () => {
 
     expect(deliverExec).toHaveBeenCalledWith({ text: '12 metrics found' }, { toolCallId: 'proto', messages: [] });
     expect(out.text).toBe('Scanning complete.');
-    expect(out.text).not.toContain('```flotilla');
+    expect(out.text).not.toContain('```flota');
   });
 
-  it('BUG REPRO: a flotilla block in an intermediate assistant turn executes even when the final result is pure narration with no block', async () => {
+  it('BUG REPRO: a flota block in an intermediate assistant turn executes even when the final result is pure narration with no block', async () => {
     const { workspaceDir, replyFile } = setup();
     const delegateExec = vi.fn(async (a: any) => `delegated: ${a.role}`);
     const tools = fakeTools({ delegate: delegateExec });
@@ -143,7 +143,7 @@ describe('ClaudeCodeDriver', () => {
     // captain never delegates; this is the exact bug this task fixes.
     const turn1 = [
       'I will delegate this now.',
-      '```flotilla',
+      '```flota',
       '{"commands":[{"cmd":"delegate","role":"scout","charter":"find the bug","task":"scan the logs"}]}',
       '```',
     ].join('\n');
@@ -162,7 +162,7 @@ describe('ClaudeCodeDriver', () => {
       { toolCallId: 'proto', messages: [] },
     );
     expect(out.text).toBe(narration);
-    expect(out.text).not.toContain('```flotilla');
+    expect(out.text).not.toContain('```flota');
   });
 
   it('command results from turn 1 appear in turn 2 prompt under [command results]', async () => {
@@ -172,7 +172,7 @@ describe('ClaudeCodeDriver', () => {
 
     const resultText1 = [
       'Working.',
-      '```flotilla',
+      '```flota',
       '{"commands":[{"cmd":"report","text":"halfway"}]}',
       '```',
     ].join('\n');
@@ -194,7 +194,7 @@ describe('ClaudeCodeDriver', () => {
     const tools = fakeTools({ report: vi.fn(async (a: any) => `reported: ${a.text}`) });
     const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
 
-    const t1 = '```flotilla\n{"commands":[{"cmd":"report","text":"a"}]}\n```';
+    const t1 = '```flota\n{"commands":[{"cmd":"report","text":"a"}]}\n```';
     setStreamReply(replyFile, [assistantEvent(t1, 's1'), resultEvent(t1, { sessionId: 's1' })]);
     await driver.turn(turnInput(tools, 'turn 1'));
     setStreamReply(replyFile, [assistantEvent('no commands here', 's1'), resultEvent('no commands here', { sessionId: 's1' })]);
@@ -213,7 +213,7 @@ describe('ClaudeCodeDriver', () => {
     const tools = fakeTools({ report: vi.fn(async (a: any) => `reported: ${a.text}`) });
     const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
 
-    const t1 = '```flotilla\n{"commands":[{"cmd":"report","text":"halfway"}]}\n```';
+    const t1 = '```flota\n{"commands":[{"cmd":"report","text":"halfway"}]}\n```';
     setStreamReply(replyFile, [assistantEvent(t1, 's1'), resultEvent(t1, { sessionId: 's1' })]);
     await driver.turn(turnInput(tools, 'turn 1'));
 
@@ -237,13 +237,13 @@ describe('ClaudeCodeDriver', () => {
     setStreamReply(replyFile, [assistantEvent('ok', 'sess-1'), resultEvent('ok', { sessionId: 'sess-1', usage: { input_tokens: 1, output_tokens: 1 } })]);
     const driver = new ClaudeCodeDriver({ workspaceDir, bin: FIXTURE });
 
-    const newText = 'delivered text:\n```flotilla\n{"commands":[]}\n```\nend';
+    const newText = 'delivered text:\n```flota\n{"commands":[]}\n```\nend';
     await driver.turn(turnInput(fakeTools(), newText));
 
     const [args] = readLog(logFile);
     const prompt = args[args.indexOf('-p') + 1];
-    expect(prompt).toBe('delivered text:\n ```flotilla\n{"commands":[]}\n ```\nend');
-    expect(prompt).not.toContain('\n```flotilla');
+    expect(prompt).toBe('delivered text:\n ```flota\n{"commands":[]}\n ```\nend');
+    expect(prompt).not.toContain('\n```flota');
     expect(prompt).not.toContain('\n```\nend');
   });
 

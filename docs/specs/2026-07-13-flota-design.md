@@ -1,4 +1,4 @@
-# Flotilla — Design Spec
+# Flota — Design Spec
 
 **Status:** Design approved 2026-07-13. Build **greenlit** 2026-07-13 by explicit operator order ("no gate, go"), overriding path ①'s wait — the conflict analysis in §7 stands as record.
 **Author:** Arthur C. Kuo, with Claude (design synthesis from 4-agent research fan-out, 2026-07-13).
@@ -26,7 +26,7 @@ Mental model: a fleet. **The operator (admiral)** issues orders → **AI captain
  Operator (admiral) ── orders / escalation answers
    │
    ├── CLI, any terminal (order entry + line-tail + inline replies)
-   └── Flotilla.app (persistent Tauri desktop app — the observatory)
+   └── Flota.app (persistent Tauri desktop app — the observatory)
              │ WebSocket / localhost
    ┌─────────┴────────── KERNEL (Node/TS, per-mission) ─────────┐
    │  EVENT LOG  — append-only JSONL, source of truth           │
@@ -51,14 +51,14 @@ v0.1's default config and demo run on the subscription drivers ($0 marginal); th
 - **Human as root node:** the operator is the root of the tree; the same message semantics apply to them.
 
 ### 3.3 Message protocol (A2A-aligned)
-Envelope: `{ eventId, seq, ts, missionId (≙ A2A contextId), taskId, parentTaskId*, from, to, kind, payload }` (* = Flotilla addition; A2A has no parent-task field).
+Envelope: `{ eventId, seq, ts, missionId (≙ A2A contextId), taskId, parentTaskId*, from, to, kind, payload }` (* = Flota addition; A2A has no parent-task field).
 
 | Kind | Direction | A2A mapping | Semantics |
 |---|---|---|---|
 | `ORDER` | down | creates Task, `submitted` | charter + task assignment |
 | `REPORT` | up | `working` + TaskStatusUpdateEvent | progress, partial findings |
 | `DELIVER` | up | artifact + `completed` | finished work product; artifacts carry stable `name` + `artifactId` |
-| `ESCALATE` | up | `input-required` | decision request → parent, or operator at root; branch pauses until answered (Flotilla addition: human-addressable) |
+| `ESCALATE` | up | `input-required` | decision request → parent, or operator at root; branch pauses until answered (Flota addition: human-addressable) |
 
 Task states use A2A names verbatim: `submitted / working / input-required / auth-required / completed / failed / canceled / rejected`.
 
@@ -67,7 +67,7 @@ Task states use A2A names verbatim: `submitted / working / input-required / auth
 - **No component holds authoritative state**: fleet picture = deterministic fold (reducer) over the log. Live UI, replay, and post-mortem are the same reducer at different cursors.
 - Token deltas stream live over the socket but are **not** persisted event-by-event; only message-level events land in the log (bloat control; replay does not need token granularity).
 
-### 3.5 Observatory (Flotilla.app — persistent Tauri desktop app)
+### 3.5 Observatory (Flota.app — persistent Tauri desktop app)
 Tauri 2 shell (system WebView, ~10MB; one codebase builds macOS/Windows/Linux) around the React Flow canvas. **Persistent**: stays open across missions; new missions auto-attach (app watches the missions dir / localhost socket). Explicitly not a browser tab; nothing reopens per mission.
 - Live org chart — nodes colored by provider, badged by state; messages animate along edges.
 - Node inspector — transcript, tool calls, tokens, cost per node.
@@ -77,7 +77,7 @@ Tauri 2 shell (system WebView, ~10MB; one codebase builds macOS/Windows/Linux) a
 - Replay — v0.1: minimal event-stepper over a past mission's log (same reducer as live).
 
 ### 3.6 CLI (any terminal)
-`flotilla "<order>"` boots a per-mission kernel, prints a compact one-line-per-event tail, supports inline escalation replies. Terminal-agnostic (iTerm2, Terminal.app, Windows Terminal, VS Code pane, SSH) and fully usable without the app. CLI and app both merely append/read the same log — entry point is architecturally irrelevant.
+`flota "<order>"` boots a per-mission kernel, prints a compact one-line-per-event tail, supports inline escalation replies. Terminal-agnostic (iTerm2, Terminal.app, Windows Terminal, VS Code pane, SSH) and fully usable without the app. CLI and app both merely append/read the same log — entry point is architecturally irrelevant.
 
 ## 4. Safety rails (kernel-enforced — the OpenClaw post-mortem answers)
 
@@ -92,7 +92,7 @@ Tauri 2 shell (system WebView, ~10MB; one codebase builds macOS/Windows/Linux) a
 
 ## 5. v0.1 vertical slice
 
-**In:** kernel; turn drivers `api` (Anthropic + OpenAI via AI SDK), `claude-code`, and `codex` (subscription CLIs, JSON-command protocol, stub-binary tested); 1 captain + N crew (depth-2 config); 4 message kinds; JSONL log + reducer; CLI (order entry, line-tail, inline replies); Flotilla.app (live chart, inspector, order console, escalation inbox, kill switch, cost ticker, minimal replay stepper); crew file access sandboxed to `missions/<id>/workspace/` (kernel lexical guard for api nodes; CLI-native tools cwd'd to the workspace for subscription nodes — documented as weaker). Cross-platform code throughout; built and tested on macOS only in v0.1. Demo mission (amended 2026-07-14): runs on the operator's subscriptions — captain on `claude-code`, crew split across `claude-code` and `codex`; no API keys required.
+**In:** kernel; turn drivers `api` (Anthropic + OpenAI via AI SDK), `claude-code`, and `codex` (subscription CLIs, JSON-command protocol, stub-binary tested); 1 captain + N crew (depth-2 config); 4 message kinds; JSONL log + reducer; CLI (order entry, line-tail, inline replies); Flota.app (live chart, inspector, order console, escalation inbox, kill switch, cost ticker, minimal replay stepper); crew file access sandboxed to `missions/<id>/workspace/` (kernel lexical guard for api nodes; CLI-native tools cwd'd to the workspace for subscription nodes — documented as weaker). Cross-platform code throughout; built and tested on macOS only in v0.1. Demo mission (amended 2026-07-14): runs on the operator's subscriptions — captain on `claude-code`, crew split across `claude-code` and `codex`; no API keys required.
 
 **Out (backlog):** Google/Ollama adapters; depth-3+ default; shell/network tools for crew; polished replay scrubbing; external A2A interop; browser-served observatory; Ink TUI full-screen mode; multi-mission concurrency in one kernel.
 
@@ -100,7 +100,7 @@ Tauri 2 shell (system WebView, ~10MB; one codebase builds macOS/Windows/Linux) a
 
 GitHub project under Arthur's account, **private during design/build; to be open-sourced later** (explicit intent, 2026-07-13). MIT license from day one so open-sourcing is a visibility flip, not a relicensing exercise. TypeScript end-to-end; npm; monorepo layout when build starts: `kernel/`, `cli/`, `app/`, `docs/`.
 
-Naming note: "flotilla" has prior OSS art (e.g., Uber's archived job-execution service). Not a blocker for a personal repo; revisit distinctiveness before public launch.
+Naming note: renamed from "Flotilla" to "Flota" on 2026-07-14 for distinctiveness — the original had prior OSS art (e.g., Uber's archived job-execution service). "Flota" (Spanish/Latin for "fleet"; "flotilla" is its diminutive) cleared an npm / PyPI / web uniqueness sweep with no software, package, or company collision.
 
 ## 7. Governance decision (2026-07-13)
 

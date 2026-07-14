@@ -1,8 +1,8 @@
-# Flotilla v0.2 — Generic CLI driver + Operator injection + TUI
+# Flota v0.2 — Generic CLI driver + Operator injection + TUI
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Make Flotilla provider-agnostic (drive any agent CLI the user already has, no bundled auth), let the operator inject prompts into any running node, and render the fleet as a live full-screen TUI in the user's own terminal.
+**Goal:** Make Flota provider-agnostic (drive any agent CLI the user already has, no bundled auth), let the operator inject prompts into any running node, and render the fleet as a live full-screen TUI in the user's own terminal.
 
 **Architecture:** Builds on v0.1 (merged, main @ 7375fa6). The `TurnDriver` seam and event-log kernel are unchanged in spirit. Three additions: (1) a config-driven `CliDriver` that generalizes the hardcoded claude-code/codex drivers into presets of one spec-parameterized class; (2) an `INSTRUCT` message + `Mission.instruct(nodeId, text)` for operator→any-node injection; (3) an Ink TUI whose logic is pure/tested and whose Ink shell is thin, subscribed to the mission's event log and calling back into the kernel.
 
@@ -27,7 +27,7 @@ kernel/src/drivers/claudeCode.ts       # becomes: preset over cliDriver
 kernel/src/drivers/codex.ts            # becomes: preset over cliDriver
 kernel/src/kernel.ts                   # + instruct(); INSTRUCT routing
 kernel/src/types.ts                    # + 'INSTRUCT'; NodeRef custom spec ref
-tui/                                   # new workspace @flotilla/tui
+tui/                                   # new workspace @flota/tui
   src/viewModel.ts                     # pure: FleetState+feed -> view rows
   src/keymap.ts                        # pure: key + ui-state -> action
   src/components/*.tsx                 # Ink: FleetTree, Inspector, InputBar, Inbox
@@ -68,7 +68,7 @@ export class CliDriver implements TurnDriver {
 
 `claudeCode.ts` becomes: `export class ClaudeCodeDriver extends CliDriver { constructor(o: {workspaceDir; bin?; timeoutMs?}) { super(CLAUDE_CODE_SPEC, o); } }` — same for codex. **The existing claudeCode.test.ts / codex.test.ts must pass unchanged** (this is the correctness proof of the extraction).
 
-- [ ] **Step 1:** Failing `cliDriver.test.ts` — a custom spec (echo-style stub via `bin` + a trivial parser) drives a two-turn exchange: first turn uses `firstArgs`, second uses `resumeArgs` with the sessionId from turn 1; a flotilla block in the transcript executes against a fake ToolSet; billing is 'subscription'. Also: `new ClaudeCodeDriver({workspaceDir, bin})` still produces the exact claude-code first-turn argv (import CLAUDE_CODE_SPEC, assert `firstArgs` output).
+- [ ] **Step 1:** Failing `cliDriver.test.ts` — a custom spec (echo-style stub via `bin` + a trivial parser) drives a two-turn exchange: first turn uses `firstArgs`, second uses `resumeArgs` with the sessionId from turn 1; a flota block in the transcript executes against a fake ToolSet; billing is 'subscription'. Also: `new ClaudeCodeDriver({workspaceDir, bin})` still produces the exact claude-code first-turn argv (import CLAUDE_CODE_SPEC, assert `firstArgs` output).
 - [ ] **Step 2:** Run — fails (no module).
 - [ ] **Step 3:** Extract specs + implement CliDriver; reimplement the two driver classes as presets.
 - [ ] **Step 4:** `npx vitest run` — cliDriver.test.ts passes AND claudeCode.test.ts + codex.test.ts pass unchanged; typecheck 0.
@@ -109,7 +109,7 @@ Semantics: if the node is unknown → `{ok:false, reason:'no such node'}`; if it
 
 ### Task V2.4: TUI pure layer — view model + keymap
 
-**Files:** create `tui/` workspace (`tui/package.json` `@flotilla/tui`, deps ink/react, dev ink-testing-library; tsconfig referencing kernel); `tui/src/viewModel.ts`, `tui/src/keymap.ts`; `tui/test/viewModel.test.ts`, `tui/test/keymap.test.ts`. Update root `package.json` workspaces + `vitest.config.ts` projects to include `tui`.
+**Files:** create `tui/` workspace (`tui/package.json` `@flota/tui`, deps ink/react, dev ink-testing-library; tsconfig referencing kernel); `tui/src/viewModel.ts`, `tui/src/keymap.ts`; `tui/test/viewModel.test.ts`, `tui/test/keymap.test.ts`. Update root `package.json` workspaces + `vitest.config.ts` projects to include `tui`.
 
 **Interfaces (exact, pure — no Ink):**
 ```ts

@@ -1,9 +1,9 @@
 {
-  "name": "@flotilla/tui",
+  "name": "@flota/tui",
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
-    "@flotilla/kernel": "*",
+    "@flota/kernel": "*",
     "ink": "^5",
     "react": "^18"
   },

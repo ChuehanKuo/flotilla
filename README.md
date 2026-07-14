@@ -1,6 +1,6 @@
-# Flotilla
+# Flota
 
-**Status: v0.1 (kernel + CLI).** Design spec: [docs/specs/2026-07-13-flotilla-design.md](docs/specs/2026-07-13-flotilla-design.md) · desktop observatory app is the next phase.
+**Status: v0.1 (kernel + CLI).** Design spec: [docs/specs/2026-07-13-flota-design.md](docs/specs/2026-07-13-flota-design.md) · desktop observatory app is the next phase.
 
 An event-sourced coordination kernel for hierarchical, multi-provider AI agent fleets — plus a persistent desktop observatory to watch and steer them live. For anyone running multi-agent work, on any terminal and any OS (macOS is the current reference platform).
 
@@ -17,7 +17,7 @@ An event-sourced coordination kernel for hierarchical, multi-provider AI agent f
 
 ## Quickstart (v0.1)
 
-Flotilla's default config rides [Claude Code](https://claude.com/claude-code)
+Flota's default config rides [Claude Code](https://claude.com/claude-code)
 (`claude`), signed in on your subscription — no API keys, $0 marginal.
 
 ```bash

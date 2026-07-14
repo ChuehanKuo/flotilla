@@ -63,7 +63,7 @@ export class Mission {
     } else {
       // mkdtempSync already returns absolute; resolve() here is a no-op kept
       // for uniformity so workspaceDir is provably absolute either branch.
-      this.workspaceDir = resolve(mkdtempSync(join(tmpdir(), 'flotilla-ws-')));
+      this.workspaceDir = resolve(mkdtempSync(join(tmpdir(), 'flota-ws-')));
       this.log = new EventLog(this.id);
     }
     this.budget = new BudgetTracker(config.pricing, config.budgetUsd);

@@ -9,7 +9,7 @@ export type Command =
   | { cmd: 'escalate'; question: string }
   | { cmd: 'answer'; taskId: string; text: string };
 
-// WHY only the LAST fenced ```flotilla block: CLI-driver transcripts often show their
+// WHY only the LAST fenced ```flota block: CLI-driver transcripts often show their
 // reasoning inline before settling on a final action; treating every block as a command
 // would double-execute draft attempts the model itself abandoned.
 // WHY both the opening AND closing fence must begin a line ((?:^|\n)``` / \n```):
@@ -18,10 +18,10 @@ export type Command =
 // cannot truncate the block. Inline single-line blocks no longer match (acceptable:
 // they fall through to no commands). Anchoring only the close (as before) left a gap:
 // neutralizeFences prefixes echoed line-start ``` with a space, but an unanchored
-// opening still matched that "```flotilla" wherever it fell in the string, letting a
+// opening still matched that "```flota" wherever it fell in the string, letting a
 // neutralized (attacker-echoed) block re-open as if genuine. No `m` flag is used —
 // `(?:^|\n)` gets line-start semantics without it.
-const FENCE_RE = /(?:^|\n)```flotilla\s*\n([\s\S]*?)\n```/g;
+const FENCE_RE = /(?:^|\n)```flota\s*\n([\s\S]*?)\n```/g;
 
 export function parseCommands(text: string): { commands: Command[]; cleanText: string } {
   let last: RegExpExecArray | null = null;
@@ -62,7 +62,7 @@ const COMMAND_SCHEMAS = {
 // WHY neutralize: text echoed into a CLI-driver prompt (a crew's delivered text, or
 // an error branch's arbitrary err.message inside a command result) can contain a raw
 // line-start ``` fence; if the CLI echoes it back verbatim, parseCommands must not
-// mistake it for a real flotilla block on a later turn. Indenting by one space is
+// mistake it for a real flota block on a later turn. Indenting by one space is
 // cheap and reversible-by-eye.
 function neutralizeFences(s: string): string {
   return s.replace(/^```/gm, ' ```');
@@ -82,7 +82,7 @@ export function formatTurnPrompt(newText: string, pendingCommandResults: string[
 }
 
 // WHY this is the shared tail of every driver's turn(): once a CLI reply has been
-// reduced to its result text, parsing the flotilla block and executing any commands
+// reduced to its result text, parsing the flota block and executing any commands
 // is identical regardless of which CLI produced that text.
 export async function runTurnProtocol(
   resultText: string,
@@ -125,12 +125,12 @@ export async function executeCommands(commands: Command[], tools: ToolSet): Prom
 }
 
 export const PROTOCOL_INSTRUCTIONS = `You have NO tools. The ONLY way to do anything — delegate, report, deliver, escalate,
-answer — is to WRITE a literal fenced code block labeled "flotilla" into your response
+answer — is to WRITE a literal fenced code block labeled "flota" into your response
 text, containing a JSON object of the shape {"commands": [...]}.
 
 READ THIS TWICE: describing an action does not perform it. Writing "I will delegate",
 "the delegations are formed and ready", or "dispatching now" accomplishes NOTHING. Only
-the literal characters of a \`\`\`flotilla ... \`\`\` block, actually present in your
+the literal characters of a \`\`\`flota ... \`\`\` block, actually present in your
 response, are executed. If your response contains no such block, you have done nothing
 and the mission stalls. Never say a command is "ready", "dispatched", or "re-issued" —
 either the block is in this response, or the action has not happened.
@@ -139,7 +139,7 @@ So: whenever you decide to act, WRITE THE BLOCK NOW, in this response. Put your 
 first if you like, then the block. Multiple blocks are fine — the LAST one is executed,
 so make your final block the complete set of commands you want run this turn.
 
-The opening \`\`\`flotilla and closing \`\`\` must each start and end on their own line,
+The opening \`\`\`flota and closing \`\`\` must each start and end on their own line,
 and you must never place a raw \`\`\` at the start of a line inside the JSON (escape
 newlines in string values as \\n, so this cannot happen in valid JSON).
 
@@ -151,9 +151,9 @@ Each entry in "commands" has a "cmd" field plus its arguments:
   - {"cmd": "answer", "taskId": "...", "text": "..."} (captain only, resumes a crew task)
 
 Example:
-\`\`\`flotilla
+\`\`\`flota
 {"commands": [{"cmd": "report", "text": "starting the scan"}]}
 \`\`\`
 
 You MUST end every turn where your task is complete with a deliver command in a
-flotilla block — the mission cannot proceed without it.`;
+flota block — the mission cannot proceed without it.`;

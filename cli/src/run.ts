@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import pc from 'picocolors';
-import { Mission, defaultConfig, realDriverFactory } from '@flotilla/kernel';
+import { Mission, defaultConfig, realDriverFactory } from '@flota/kernel';
 import { formatEvent } from './render.js';
 
 const execFile = promisify(execFileCb);

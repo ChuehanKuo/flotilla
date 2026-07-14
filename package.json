@@ -1,5 +1,5 @@
 {
-  "name": "flotilla",
+  "name": "flota",
   "private": true,
   "type": "module",
   "workspaces": ["kernel", "cli", "tui"],
