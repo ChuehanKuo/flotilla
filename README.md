@@ -17,9 +17,8 @@ An event-sourced coordination kernel for hierarchical, multi-provider AI agent f
 
 ## Quickstart (v0.1)
 
-Flotilla's default config rides the agent CLIs you already have:
-[Claude Code](https://claude.com/claude-code) (`claude`) and OpenAI's Codex CLI
-(`codex`), each signed in on its own subscription — no API keys, $0 marginal.
+Flotilla's default config rides [Claude Code](https://claude.com/claude-code)
+(`claude`), signed in on your subscription — no API keys, $0 marginal.
 
 ```bash
 npm install
@@ -28,10 +27,13 @@ npx tsx cli/src/index.ts run "your mission order here"
 npx tsx cli/src/index.ts replay missions/<mission-id>/events.jsonl
 ```
 
-Prefer raw APIs? Point the config at the `api` driver and export
-`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`; the hard dollar cap applies there
-(`--budget`, default $5). Subscription nodes are bounded by per-node turn
-caps, depth caps, a watchdog, and mission timeouts instead.
+**Drivers.** `claude-code` (default) is the proven path. `codex` (OpenAI's
+Codex CLI) is **experimental in v0.1** — the driver exists and is unit-tested,
+but hangs on live contact pending real-CLI hardening (v0.2); opt in per node
+at your own risk. `api` (raw Anthropic/OpenAI keys) is fully supported: point
+a node's config at it and export `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` — the
+hard dollar cap applies there (`--budget`, default $5). Subscription nodes are
+bounded by per-node turn caps, depth caps, a watchdog, and mission timeouts.
 
 ## Protocol posture
 

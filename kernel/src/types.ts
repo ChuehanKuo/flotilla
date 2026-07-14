@@ -62,9 +62,14 @@ export function defaultConfig(): MissionConfig {
     maxTurnsPerNode: 20,
     models: {
       captain: { driver: 'claude-code' },
+      // WHY both default crew are claude-code (v0.1): the codex driver is EXPERIMENTAL
+      // — it hung on live contact (unverified real `codex exec --json` shape / sandbox
+      // interaction) where claude-code has run reliably. codex stays in the tree and is
+      // opt-in per-node via a delegate's driver arg or a hand-built config; hardening it
+      // against the live CLI is a v0.2 item. Two slots keeps captain parallelism.
       crew: [
         { driver: 'claude-code' },
-        { driver: 'codex' },
+        { driver: 'claude-code' },
       ],
       apiDefaults: { anthropic: 'claude-sonnet-5', openai: 'gpt-5.6-sol' },
     },
