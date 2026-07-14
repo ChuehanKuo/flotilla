@@ -7,7 +7,7 @@ export type TaskState =
   | 'submitted' | 'working' | 'input-required'
   | 'completed' | 'failed' | 'canceled' | 'rejected';
 
-export type MessageKind = 'ORDER' | 'REPORT' | 'DELIVER' | 'ESCALATE' | 'ANSWER';
+export type MessageKind = 'ORDER' | 'REPORT' | 'DELIVER' | 'ESCALATE' | 'ANSWER' | 'INSTRUCT';
 
 export interface FleetMessage {
   kind: MessageKind;

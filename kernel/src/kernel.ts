@@ -76,6 +76,18 @@ export class Mission {
     this.route({ kind: 'ANSWER', from: 'operator', to: '', taskId, text });
   }
 
+  instruct(nodeId: string, text: string): { ok: boolean; reason?: string } {
+    if (this.done) return { ok: false, reason: 'mission over' };
+    const node = this.nodes.get(nodeId);
+    if (!node) return { ok: false, reason: 'no such node' };
+    const state = this.taskStateOf(node.spec.taskId);
+    if (state === 'completed' || state === 'failed' || state === 'canceled' || state === 'rejected') {
+      return { ok: false, reason: 'node finished' };
+    }
+    this.route({ kind: 'INSTRUCT', from: 'operator', to: nodeId, taskId: node.spec.taskId, text });
+    return { ok: true };
+  }
+
   cancel(reason: string): void { this.finish({ status: 'canceled', reason, totalCostUsd: this.budget.totalUsd }, 'mission.canceled', { reason }); }
 
   start(): Promise<MissionResult> {
@@ -107,8 +119,6 @@ export class Mission {
     const nodeId = captain ? 'captain' : `${role.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${this.counter}`;
     const taskId = `t${this.counter}`;
     const parentTaskId = parentId === 'operator' ? undefined : this.nodes.get(parentId)?.spec.taskId;
-    this.log.append('node.spawned', { nodeId, parentId: parentId === 'operator' ? undefined : parentId, role, driver: ref.driver, provider: ref.provider, model: ref.model, taskId });
-    this.log.append('task.state', { taskId, parentTaskId, assignee: nodeId, state: 'submitted' });
 
     const api: KernelApi = {
       delegate: (from, args) => this.delegate(from, args),
@@ -150,6 +160,12 @@ export class Mission {
         abortSignal: this.abort.signal,
       },
     );
+    // WHY node construction happens before these events are appended: a
+    // throw inside AgentNode's constructor (e.g. a bad driver spec) must not
+    // leave node.spawned/task.state events in the log for a node that never
+    // made it into this.nodes — the log would show a phantom node forever.
+    this.log.append('node.spawned', { nodeId, parentId: parentId === 'operator' ? undefined : parentId, role, driver: ref.driver, provider: ref.provider, model: ref.model, taskId });
+    this.log.append('task.state', { taskId, parentTaskId, assignee: nodeId, state: 'submitted' });
     this.nodes.set(nodeId, node);
     return nodeId;
   }
@@ -212,6 +228,12 @@ export class Mission {
         break;
       case 'REPORT':
         if (resolved.to !== 'operator') this.nodes.get(resolved.to)?.enqueue(resolved);
+        break;
+      case 'INSTRUCT':
+        // Operator guidance mid-turn: wakes the node like an ORDER/ANSWER
+        // batch, but never touches task state — the node's task keeps
+        // whatever state it already had (working, input-required, …).
+        this.nodes.get(resolved.to)?.enqueue(resolved);
         break;
       case 'DELIVER': {
         this.log.append('task.state', { taskId: resolved.taskId, state: 'completed' });
