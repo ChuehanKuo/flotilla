@@ -15,6 +15,8 @@ import {
   appendEvent,
   createReplaySource,
   createLiveSource,
+  createTauriSource,
+  isTauriRuntime,
   EMPTY_FOLD,
   type EventFold,
   type EventSourceMessage,
@@ -76,18 +78,20 @@ async function loadEvents(url: string): Promise<FleetEvent[]> {
 const PLAY_INTERVAL_MS = 220;
 const DEFAULT_BRIDGE_URL = 'ws://127.0.0.1:4317';
 
-// ?live=1 (or any truthy value other than '0'/'false') switches into live
-// mode; ?bridge=ws://... overrides the dev bridge URL. Both read once at
-// mount — this app doesn't support switching modes without a reload.
-function readModeFromUrl(): { mode: 'replay' | 'live'; logUrl: string; bridgeUrl: string } {
+// Mode resolution: running inside the Tauri native shell always wins (it's
+// the shipped app, not a dev preview, and has no other way to get events).
+// Otherwise ?live=1 (or any truthy value other than '0'/'false') switches
+// the browser dev preview into live mode; ?bridge=ws://... overrides the
+// dev bridge URL. All read once at mount — this app doesn't support
+// switching modes without a reload.
+function readModeFromUrl(): { mode: 'replay' | 'live' | 'tauri'; logUrl: string; bridgeUrl: string } {
   const params = new URLSearchParams(window.location.search);
+  const logUrl = params.get('log') ?? '/mission.jsonl';
+  const bridgeUrl = params.get('bridge') ?? DEFAULT_BRIDGE_URL;
+  if (isTauriRuntime()) return { mode: 'tauri', logUrl, bridgeUrl };
   const live = params.get('live');
   const mode = live && live !== '0' && live !== 'false' ? 'live' : 'replay';
-  return {
-    mode,
-    logUrl: params.get('log') ?? '/mission.jsonl',
-    bridgeUrl: params.get('bridge') ?? DEFAULT_BRIDGE_URL,
-  };
+  return { mode, logUrl, bridgeUrl };
 }
 
 export function App() {
@@ -121,7 +125,9 @@ export function App() {
     let cancelled = false;
     let unsubscribe: (() => void) | undefined;
 
-    if (mode === 'live') {
+    if (mode === 'tauri') {
+      unsubscribe = createTauriSource().subscribe(handleSourceMessage);
+    } else if (mode === 'live') {
       unsubscribe = createLiveSource(bridgeUrl).subscribe(handleSourceMessage);
     } else {
       setConnectionStatus('connecting');
@@ -141,9 +147,9 @@ export function App() {
   }, [mode, logUrl, bridgeUrl, handleSourceMessage]);
 
   const events = fold.events;
-  // live mode always tracks the fold's own cursor (auto-follow "now");
-  // replay mode drives its own independent scrub/play cursor.
-  const cursor = mode === 'live' ? fold.cursor : replayCursor;
+  // live and tauri modes always track the fold's own cursor (auto-follow
+  // "now"); replay mode drives its own independent scrub/play cursor.
+  const cursor = mode === 'live' || mode === 'tauri' ? fold.cursor : replayCursor;
 
   // REPLAY: advance the cursor on a timer while playing; each tick re-folds
   // reduce(events[0..cursor]) below, which is what makes the fleet animate.
@@ -210,7 +216,7 @@ export function App() {
           }}
         >
           <strong>flota observatory</strong>
-          {mode === 'live' ? (
+          {mode === 'live' || mode === 'tauri' ? (
             <span
               title={`connection: ${connectionStatus}`}
               style={{
@@ -223,7 +229,7 @@ export function App() {
                 padding: '2px 8px',
               }}
             >
-              ● {connectionStatus === 'open' ? 'LIVE' : connectionStatus.toUpperCase()}
+              ● {connectionStatus === 'open' ? (mode === 'tauri' ? 'NATIVE' : 'LIVE') : connectionStatus.toUpperCase()}
             </span>
           ) : null}
           <span style={{ color: '#9ca3af' }}>
@@ -291,7 +297,8 @@ export function App() {
           )
         ) : (
           <div style={{ color: '#6b7280' }}>
-            click a node to inspect its message/usage feed ({mode === 'live' ? `live: ${bridgeUrl}` : `log: ${logUrl}`})
+            click a node to inspect its message/usage feed (
+            {mode === 'tauri' ? 'native: Rust file-watch' : mode === 'live' ? `live: ${bridgeUrl}` : `log: ${logUrl}`})
           </div>
         )}
       </div>

@@ -44,6 +44,14 @@ export interface FleetEventSource {
   subscribe(onMessage: (msg: EventSourceMessage) => void): () => void;
 }
 
+// Runtime detection: true when the webview is hosted by the Tauri native
+// shell (as opposed to a plain browser tab running `vite dev`). Checked at
+// call time, not import time, since the injected globals land before React
+// mounts but this still keeps the check self-contained for tests.
+export function isTauriRuntime(): boolean {
+  return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+}
+
 // REPLAY: an in-memory events array (O1's behavior), delivered as a single
 // snapshot. No further messages — App's own play/scrub cursor drives the
 // animation forward from there.
@@ -122,6 +130,84 @@ export function createLiveSource(url: string, opts: LiveSourceOptions = {}): Fle
         closedByCaller = true;
         if (reconnectTimer) clearTimeout(reconnectTimer);
         ws?.close();
+      };
+    },
+  };
+}
+
+// TAURI: the native shell's production event source, backed by the Rust
+// file-watcher in src-tauri/src/lib.rs (which replaces this dev bridge when
+// the app is bundled). Wire protocol (see lib.rs):
+//   invoke('get_snapshot') -> { missionId, events }   -- pulled on demand
+//   listen('flota-event', ...)  -> { missionId, event }  -- one new event
+//   listen('flota-status', ...) -> { status, detail? }
+//
+// Race handling: the Rust watcher starts on app launch and may `emit` events
+// before this module's `listen()` calls resolve (both are async). So we
+// attach the event listener FIRST and buffer anything it delivers before
+// the snapshot arrives, then dedupe the buffer against the snapshot by
+// `seq` once it lands (the snapshot is authoritative for every seq it
+// covers), then flush whatever's left. Never drops or duplicates an event
+// regardless of emit/listen ordering.
+export function createTauriSource(): FleetEventSource {
+  return {
+    subscribe(onMessage) {
+      let cancelled = false;
+      let unlistenEvent: (() => void) | undefined;
+      let unlistenStatus: (() => void) | undefined;
+
+      onMessage({ type: 'status', status: 'connecting' });
+
+      (async () => {
+        const [{ listen }, { invoke }] = await Promise.all([import('@tauri-apps/api/event'), import('@tauri-apps/api/core')]);
+        if (cancelled) return;
+
+        let gotSnapshot = false;
+        let snapshotSeqCeiling = -1; // highest `seq` already delivered via the snapshot
+        const buffered: { missionId?: string; event: FleetEvent }[] = [];
+
+        unlistenEvent = await listen<{ missionId?: string; event: FleetEvent }>('flota-event', e => {
+          const { missionId, event } = e.payload;
+          if (!gotSnapshot) {
+            buffered.push({ missionId, event });
+            return;
+          }
+          if (event.seq <= snapshotSeqCeiling) return; // already included in the snapshot
+          onMessage({ type: 'event', missionId, event });
+        });
+        if (cancelled) {
+          unlistenEvent();
+          return;
+        }
+
+        unlistenStatus = await listen<{ status: string; detail?: string }>('flota-status', e => {
+          const { status, detail } = e.payload;
+          if (status === 'connecting' || status === 'open' || status === 'closed' || status === 'error') {
+            onMessage({ type: 'status', status, detail });
+          }
+        });
+        if (cancelled) {
+          unlistenStatus();
+          return;
+        }
+
+        const snapshot = await invoke<{ missionId?: string; events: FleetEvent[] }>('get_snapshot');
+        if (cancelled) return;
+        gotSnapshot = true;
+        for (const e of snapshot.events) if (e.seq > snapshotSeqCeiling) snapshotSeqCeiling = e.seq;
+        onMessage({ type: 'snapshot', missionId: snapshot.missionId, events: snapshot.events });
+        onMessage({ type: 'status', status: 'open' });
+
+        for (const { missionId, event } of buffered) {
+          if (event.seq <= snapshotSeqCeiling) continue;
+          onMessage({ type: 'event', missionId, event });
+        }
+      })().catch(e => onMessage({ type: 'status', status: 'error', detail: String(e) }));
+
+      return () => {
+        cancelled = true;
+        unlistenEvent?.();
+        unlistenStatus?.();
       };
     },
   };

@@ -7,24 +7,27 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc -b",
-    "bridge": "node src/devBridge.mjs"
+    "bridge": "node src/devBridge.mjs",
+    "tauri": "tauri"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^1",
     "@flota/kernel": "*",
+    "@tauri-apps/api": "^2.11.1",
+    "@xyflow/react": "^12",
     "react": "^18",
     "react-dom": "^18",
-    "@xyflow/react": "^12",
-    "@dagrejs/dagre": "^1",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "vite": "^6",
-    "@vitejs/plugin-react": "^4.7.0",
-    "typescript": "^5.6.0",
+    "@tauri-apps/cli": "^2.11.4",
+    "@testing-library/react": "^16",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@types/ws": "^8",
+    "@vitejs/plugin-react": "^4.7.0",
     "jsdom": "^29",
-    "@testing-library/react": "^16"
+    "typescript": "^5.6.0",
+    "vite": "^6"
   }
 }
