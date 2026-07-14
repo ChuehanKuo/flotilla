@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": { "outDir": "dist", "jsx": "react-jsx", "lib": ["ES2022", "DOM"], "types": ["vite/client"] },
+  "include": ["src", "test"],
+  "references": [{ "path": "../kernel" }]
+}

@@ -1,0 +1,432 @@
+/*
+ * Flota Observatory theme — a bridge console, not a generic dark dashboard.
+ * The domain vocabulary (fleet, captain, crew, mission, escalation) is
+ * naval; the palette and motion follow that: sonar-teal for active work,
+ * brass/gold for the captain's rank, hairline radar-grid backdrop, amber
+ * for anything waiting on the operator.
+ */
+
+:root {
+  --bg-deep: #090d12;
+  --bg-panel: #10161d;
+  --bg-panel-raised: #151d26;
+  --line: #1c2530;
+  --line-bright: #2a3644;
+
+  --text-primary: #d9e4ec;
+  --text-dim: #6b7d8f;
+  --text-faint: #445263;
+
+  --state-submitted: #64748b;
+  --state-working: #22d3ee;
+  --state-input-required: #f0a941;
+  --state-completed: #3ddc84;
+  --state-failed: #ef5757;
+  --state-canceled: #64748b;
+  --state-rejected: #ef5757;
+
+  --captain-gold: #caa257;
+
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg-deep);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--state-working);
+  color: var(--bg-deep);
+}
+
+:focus-visible {
+  outline: 2px solid var(--state-working);
+  outline-offset: 2px;
+}
+
+/* radar-chart dot grid instead of a flat React Flow background */
+.flota-canvas .react-flow__background {
+  background-color: var(--bg-deep);
+}
+
+.flota-canvas .react-flow__controls {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.flota-canvas .react-flow__controls button {
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line);
+  fill: var(--text-dim);
+}
+
+.flota-canvas .react-flow__controls button:hover {
+  background: var(--bg-panel-raised);
+}
+
+/* ---- fleet node ---- */
+
+.fleet-node {
+  position: relative;
+  min-width: 172px;
+  border-radius: 10px;
+  padding: 9px 13px;
+  background: var(--bg-panel);
+  border: 1.5px solid var(--node-color, var(--state-submitted));
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.fleet-node--selected {
+  border-color: var(--text-primary);
+  box-shadow: 0 0 0 1px var(--text-primary);
+}
+
+.fleet-node--captain {
+  border-color: var(--captain-gold);
+  box-shadow: 0 0 0 1px rgba(202, 162, 87, 0.35), 0 0 18px rgba(202, 162, 87, 0.12);
+}
+
+.fleet-node--captain.fleet-node--selected {
+  box-shadow: 0 0 0 1px var(--captain-gold), 0 0 18px rgba(202, 162, 87, 0.3);
+}
+
+.fleet-node__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+}
+
+.fleet-node__anchor {
+  color: var(--captain-gold);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.fleet-node__meta {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.fleet-node__driver-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line-bright);
+  background: var(--bg-panel-raised);
+  color: var(--text-dim);
+  letter-spacing: 0.2px;
+}
+
+.fleet-node__state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--node-color, var(--state-submitted));
+  flex-shrink: 0;
+}
+
+.fleet-node__cost {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  opacity: 0.85;
+}
+
+/* sonar ping: expanding, fading ring — the signature motion, reserved for
+   nodes actively working so it reads as "this one is doing something" and
+   nowhere else. */
+.fleet-node__pulse {
+  position: absolute;
+  inset: -1.5px;
+  border-radius: 10px;
+  border: 1.5px solid var(--state-working);
+  pointer-events: none;
+  animation: sonar-ping 1.8s ease-out infinite;
+}
+
+@keyframes sonar-ping {
+  0% {
+    opacity: 0.65;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
+/* input-required: a slow amber breathing glow — waiting on the operator,
+   not mid-task, so it should feel patient rather than urgent-radiating. */
+.fleet-node--input-required {
+  animation: amber-breathe 2.6s ease-in-out infinite;
+}
+
+@keyframes amber-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 6px rgba(240, 169, 65, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(240, 169, 65, 0.45);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fleet-node__pulse {
+    animation: none;
+    opacity: 0.35;
+  }
+  .fleet-node--input-required {
+    animation: none;
+    box-shadow: 0 0 10px rgba(240, 169, 65, 0.3);
+  }
+  .escalation-banner {
+    animation: none !important;
+  }
+}
+
+/* ---- header / chrome ---- */
+
+.flota-header {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  font-family: var(--font-sans);
+  z-index: 5;
+}
+
+.flota-header__bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: rgba(16, 22, 29, 0.92);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 14px;
+}
+
+.flota-header__brand {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.4px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.flota-header__brand .anchor {
+  color: var(--captain-gold);
+}
+
+.flota-header__divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line-bright);
+}
+
+.flota-header__mission {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flota-header__mission strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.status-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.flota-header__spacer {
+  flex: 1;
+}
+
+.flota-header__stat {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.flota-header__stat strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.flota-header__error {
+  color: var(--state-failed);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.flota-transport-btn {
+  background: var(--bg-panel-raised);
+  border: 1px solid var(--line-bright);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+
+.flota-transport-btn:hover:not(:disabled) {
+  border-color: var(--state-working);
+}
+
+.flota-transport-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.flota-scrub {
+  accent-color: var(--state-working);
+}
+
+/* escalation banner: ambient, not modal — mission control keeps rendering
+   underneath while this stays visible until every escalation clears. */
+.escalation-banner {
+  margin-top: 6px;
+  background: rgba(240, 169, 65, 0.12);
+  border: 1px solid rgba(240, 169, 65, 0.55);
+  border-radius: 10px;
+  padding: 7px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #ffd699;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  animation: amber-breathe 2.6s ease-in-out infinite;
+}
+
+.escalation-banner:hover {
+  border-color: var(--state-input-required);
+}
+
+.escalation-banner__count {
+  font-weight: 700;
+}
+
+/* ---- inspector ---- */
+
+.inspector {
+  width: 340px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--line);
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.inspector__header {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-sans);
+}
+
+.inspector__title {
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.inspector__node-name {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--text-primary);
+  margin-top: 2px;
+}
+
+.inspector__node-meta {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.inspector__feed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.inspector__line {
+  margin-bottom: 7px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  display: flex;
+  gap: 6px;
+}
+
+.inspector__tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  height: fit-content;
+}
+
+.inspector__empty {
+  padding: 14px;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  line-height: 1.6;
+}
