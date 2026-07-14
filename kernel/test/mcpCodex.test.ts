@@ -67,6 +67,20 @@ describe('McpCodexDriver — argv/CODEX_HOME wiring (stub: fake-codex.sh)', () =
     driver.cleanup();
   });
 
+  it('config.toml also carries the [mcp_servers.flota] block (url + approve mode + bearer_token_env_var), so MCP config survives a resume re-read', async () => {
+    const { workspaceDir, replyFile } = setupArgvOnly();
+    setReplyEvents(replyFile, [{ type: 'session_started', session_id: 'sess-1' }, { type: 'agent_message', text: 'ok' }]);
+    const driver = new McpCodexDriver({ workspaceDir, mcpUrl: MCP_URL, token: TOKEN, bin: FIXTURE_ARGV });
+
+    const configToml = readFileSync(join(driver.codexHome, 'config.toml'), 'utf8');
+    expect(configToml).toContain('[mcp_servers.flota]');
+    expect(configToml).toContain(`url = "${MCP_URL}"`);
+    expect(configToml).toContain('default_tools_approval_mode = "approve"');
+    expect(configToml).toContain('bearer_token_env_var = "FLOTA_MCP_TOKEN"');
+
+    driver.cleanup();
+  });
+
   it('resume turn: exact argv with resume subcommand + same -c flags, no --cd/--sandbox, no charter', async () => {
     const { workspaceDir, logFile, replyFile } = setupArgvOnly();
     const driver = new McpCodexDriver({ workspaceDir, mcpUrl: MCP_URL, token: TOKEN, bin: FIXTURE_ARGV });
@@ -138,6 +152,35 @@ describe('McpCodexDriver — argv/CODEX_HOME wiring (stub: fake-codex.sh)', () =
     const calls = spy.mock.calls.map(c => c.join(' '));
     expect(calls.some(c => c.includes('tool_call started') && c.includes('flota.report'))).toBe(true);
     expect(calls.some(c => c.includes('tool_call completed') && c.includes('flota.report'))).toBe(true);
+
+    spy.mockRestore();
+    driver.cleanup();
+  });
+
+  it('ONLY mcp_tool_call items produce tool events — non-mcp item.started/completed (reasoning, command_execution) are ignored, not logged as undefined.undefined', async () => {
+    const { workspaceDir, replyFile } = setupArgvOnly();
+    setReplyEvents(replyFile, [
+      { type: 'session_started', session_id: 'sess-1' },
+      // Real codex emits started/completed for these non-mcp item kinds too:
+      { type: 'item.started', item: { id: 'r1', type: 'reasoning' } },
+      { type: 'item.completed', item: { id: 'r1', type: 'reasoning' } },
+      { type: 'item.started', item: { id: 'c1', type: 'command_execution', command: 'ls' } },
+      { type: 'item.completed', item: { id: 'c1', type: 'command_execution', command: 'ls', status: 'completed' } },
+      // ...and one genuine mcp tool call:
+      { type: 'item.started', item: { id: 'm1', type: 'mcp_tool_call', server: 'flota', tool: 'deliver', arguments: { text: 'x' }, result: null, error: null, status: 'in_progress' } },
+      { type: 'item.completed', item: { id: 'm1', type: 'mcp_tool_call', server: 'flota', tool: 'deliver', arguments: { text: 'x' }, result: { content: [{ type: 'text', text: 'delivered' }] }, error: null, status: 'completed' } },
+      { type: 'agent_message', text: 'done' },
+    ]);
+    const driver = new McpCodexDriver({ workspaceDir, mcpUrl: MCP_URL, token: TOKEN, bin: FIXTURE_ARGV });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await driver.turn(turnInput('go'));
+
+    const toolEventCalls = spy.mock.calls.map(c => c.join(' ')).filter(c => c.includes('[mcpCodex] tool_call'));
+    // Exactly the two mcp_tool_call events — reasoning/command_execution produce none.
+    expect(toolEventCalls).toHaveLength(2);
+    expect(toolEventCalls.every(c => c.includes('flota.deliver'))).toBe(true);
+    expect(toolEventCalls.some(c => c.includes('undefined'))).toBe(false);
 
     spy.mockRestore();
     driver.cleanup();

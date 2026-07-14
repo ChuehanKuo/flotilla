@@ -62,9 +62,23 @@ function resumeArgs(promptText: string, sessionId: string, mcpUrl: string): stri
 // require touching their file (never, without consent) or fail to grant trust
 // at all. A fresh CODEX_HOME per driver instance is disposable and isolates
 // one node's trust grant from every other node/mission.
-function buildConfigToml(workspaceDir: string): string {
-  const escaped = workspaceDir.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return `[projects."${escaped}"]\ntrust_level = "trusted"\n`;
+// WHY write the [mcp_servers.flota] block too, not just trust: each
+// `codex exec resume` is a FRESH process that re-reads $CODEX_HOME/config.toml.
+// Baking the MCP server config into the file (identical to the -c overrides —
+// same three values, known at construction, so they can't diverge) means the
+// MCP wiring survives resume even if -c were ever ignored on the resume
+// subcommand. Belt-and-braces against the one resume-time unknown, and it
+// restores literal brief compliance ([mcp_servers.flota] in config.toml).
+function buildConfigToml(workspaceDir: string, mcpUrl: string): string {
+  const esc = (s: string): string => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return (
+    `[projects."${esc(workspaceDir)}"]\n` +
+    `trust_level = "trusted"\n\n` +
+    `[mcp_servers.flota]\n` +
+    `url = "${esc(mcpUrl)}"\n` +
+    `default_tools_approval_mode = "approve"\n` +
+    `bearer_token_env_var = "FLOTA_MCP_TOKEN"\n`
+  );
 }
 
 interface CodexMcpEvent {
@@ -73,6 +87,7 @@ interface CodexMcpEvent {
   session_id?: unknown;
   thread_id?: unknown;
   item?: {
+    type?: unknown;
     server?: unknown;
     tool?: unknown;
     arguments?: unknown;
@@ -131,7 +146,17 @@ function parseCodexMcpStdout(stdout: string, ctx: { isFirstTurn: boolean }): Mcp
   }
 
   for (const e of events) {
-    if (e.item && typeof e.type === 'string' && (e.type === 'item.started' || e.type === 'item.completed')) {
+    // WHY gate on item.type === 'mcp_tool_call': real codex emits
+    // item.started/item.completed for OTHER item kinds too (reasoning,
+    // command_execution, agent_message). Without this gate every real run
+    // would log `tool_call started: undefined.undefined args=undefined` noise
+    // into the exact observability surface live verification reads.
+    if (
+      e.item &&
+      e.item.type === 'mcp_tool_call' &&
+      typeof e.type === 'string' &&
+      (e.type === 'item.started' || e.type === 'item.completed')
+    ) {
       logMcpToolEvent(e.type, e.item);
     }
   }
@@ -200,7 +225,7 @@ export class McpCodexDriver implements TurnDriver {
     // filesystem (no /tmp, permissions) fails fast at driver construction
     // rather than silently on the first turn.
     this.codexHome = mkdtempSync(join(tmpdir(), 'flota-codex-home-'));
-    writeFileSync(join(this.codexHome, 'config.toml'), buildConfigToml(this.opts.workspaceDir));
+    writeFileSync(join(this.codexHome, 'config.toml'), buildConfigToml(this.opts.workspaceDir, this.opts.mcpUrl));
   }
 
   async turn(input: TurnInput): Promise<TurnOutput> {
