@@ -2,11 +2,11 @@
   "name": "flotilla",
   "private": true,
   "type": "module",
-  "workspaces": ["kernel", "cli"],
+  "workspaces": ["kernel", "cli", "tui"],
   "engines": { "node": ">=20" },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -b kernel cli"
+    "typecheck": "tsc -b kernel cli tui"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
