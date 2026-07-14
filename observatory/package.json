@@ -6,14 +6,16 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "bridge": "node src/devBridge.mjs"
   },
   "dependencies": {
     "@flota/kernel": "*",
     "react": "^18",
     "react-dom": "^18",
     "@xyflow/react": "^12",
-    "@dagrejs/dagre": "^1"
+    "@dagrejs/dagre": "^1",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "vite": "^6",
@@ -21,6 +23,7 @@
     "typescript": "^5.6.0",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "@types/ws": "^8",
     "jsdom": "^29",
     "@testing-library/react": "^16"
   }

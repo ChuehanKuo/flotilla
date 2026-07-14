@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ReactFlow, Background, Controls, Handle, Position, type Node, type Edge, type NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 // WHY a deep import, not the '@flota/kernel' barrel: index.ts also re-exports
@@ -10,6 +10,15 @@ import '@xyflow/react/dist/style.css';
 import { reduce } from '@flota/kernel/src/reducer.js';
 import type { FleetEvent } from '@flota/kernel';
 import { projectGraph, layout, nodeFeed, type GraphNode } from './graph.js';
+import {
+  applySnapshot,
+  appendEvent,
+  createReplaySource,
+  createLiveSource,
+  EMPTY_FOLD,
+  type EventFold,
+  type EventSourceMessage,
+} from './eventSource.js';
 
 const STATE_COLOR: Record<string, string> = {
   submitted: '#6b7280',
@@ -65,38 +74,88 @@ async function loadEvents(url: string): Promise<FleetEvent[]> {
 }
 
 const PLAY_INTERVAL_MS = 220;
+const DEFAULT_BRIDGE_URL = 'ws://127.0.0.1:4317';
+
+// ?live=1 (or any truthy value other than '0'/'false') switches into live
+// mode; ?bridge=ws://... overrides the dev bridge URL. Both read once at
+// mount — this app doesn't support switching modes without a reload.
+function readModeFromUrl(): { mode: 'replay' | 'live'; logUrl: string; bridgeUrl: string } {
+  const params = new URLSearchParams(window.location.search);
+  const live = params.get('live');
+  const mode = live && live !== '0' && live !== 'false' ? 'live' : 'replay';
+  return {
+    mode,
+    logUrl: params.get('log') ?? '/mission.jsonl',
+    bridgeUrl: params.get('bridge') ?? DEFAULT_BRIDGE_URL,
+  };
+}
 
 export function App() {
-  const [events, setEvents] = useState<FleetEvent[]>([]);
-  const [cursor, setCursor] = useState(-1); // index of last folded event; -1 = nothing loaded yet
+  const [{ mode, logUrl, bridgeUrl }] = useState(readModeFromUrl);
+  const [fold, setFold] = useState<EventFold>(EMPTY_FOLD);
+  const [replayCursor, setReplayCursor] = useState(-1); // replay mode's own scrub position
   const [playing, setPlaying] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>();
   const [loadError, setLoadError] = useState<string | undefined>();
-  const [logUrl, setLogUrl] = useState('/mission.jsonl');
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'open' | 'closed' | 'error'>('connecting');
+  const [missionLabel, setMissionLabel] = useState<string | undefined>();
+
+  const handleSourceMessage = useCallback(
+    (msg: EventSourceMessage) => {
+      if (msg.type === 'snapshot') {
+        setFold(applySnapshot(msg.events));
+        if (mode === 'replay') setReplayCursor(msg.events.length > 0 ? 0 : -1);
+        if (msg.missionId) setMissionLabel(msg.missionId);
+      } else if (msg.type === 'event') {
+        setFold(prev => appendEvent(prev, msg.event));
+        if (msg.missionId) setMissionLabel(msg.missionId);
+      } else {
+        setConnectionStatus(msg.status);
+        if (msg.status === 'error' && msg.detail) setLoadError(msg.detail);
+      }
+    },
+    [mode],
+  );
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const url = params.get('log') ?? '/mission.jsonl';
-    setLogUrl(url);
-    loadEvents(url)
-      .then(evs => {
-        setEvents(evs);
-        setCursor(evs.length > 0 ? 0 : -1);
-      })
-      .catch(e => setLoadError(String(e)));
-  }, []);
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+
+    if (mode === 'live') {
+      unsubscribe = createLiveSource(bridgeUrl).subscribe(handleSourceMessage);
+    } else {
+      setConnectionStatus('connecting');
+      loadEvents(logUrl)
+        .then(evs => {
+          if (cancelled) return;
+          setConnectionStatus('open');
+          unsubscribe = createReplaySource(evs).subscribe(handleSourceMessage);
+        })
+        .catch(e => setLoadError(String(e)));
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [mode, logUrl, bridgeUrl, handleSourceMessage]);
+
+  const events = fold.events;
+  // live mode always tracks the fold's own cursor (auto-follow "now");
+  // replay mode drives its own independent scrub/play cursor.
+  const cursor = mode === 'live' ? fold.cursor : replayCursor;
 
   // REPLAY: advance the cursor on a timer while playing; each tick re-folds
   // reduce(events[0..cursor]) below, which is what makes the fleet animate.
   useEffect(() => {
-    if (!playing) return;
-    if (cursor >= events.length - 1) {
+    if (mode !== 'replay' || !playing) return;
+    if (replayCursor >= events.length - 1) {
       setPlaying(false);
       return;
     }
-    const t = setTimeout(() => setCursor(c => Math.min(c + 1, events.length - 1)), PLAY_INTERVAL_MS);
+    const t = setTimeout(() => setReplayCursor(c => Math.min(c + 1, events.length - 1)), PLAY_INTERVAL_MS);
     return () => clearTimeout(t);
-  }, [playing, cursor, events.length]);
+  }, [mode, playing, replayCursor, events.length]);
 
   const slice = useMemo(() => events.slice(0, cursor + 1), [events, cursor]);
   const fleetState = useMemo(() => reduce(slice), [slice]);
@@ -151,34 +210,59 @@ export function App() {
           }}
         >
           <strong>flota observatory</strong>
+          {mode === 'live' ? (
+            <span
+              title={`connection: ${connectionStatus}`}
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: 0.5,
+                color: connectionStatus === 'open' ? '#16a34a' : connectionStatus === 'error' ? '#dc2626' : '#d97706',
+                border: `1px solid currentColor`,
+                borderRadius: 999,
+                padding: '2px 8px',
+              }}
+            >
+              ● {connectionStatus === 'open' ? 'LIVE' : connectionStatus.toUpperCase()}
+            </span>
+          ) : null}
           <span style={{ color: '#9ca3af' }}>
-            {fleetState.missionId || '—'} · {fleetState.status} · ${fleetState.totalCostUsd.toFixed(4)}
+            {fleetState.missionId || missionLabel || '—'} · {fleetState.status} · ${fleetState.totalCostUsd.toFixed(4)}
           </span>
           <span style={{ flex: 1 }} />
           {loadError ? <span style={{ color: '#dc2626' }}>{loadError}</span> : null}
-          <button onClick={() => setCursor(0)} disabled={events.length === 0}>
-            ⏮
-          </button>
-          <button onClick={() => setPlaying(p => !p)} disabled={events.length === 0}>
-            {playing ? '⏸ pause' : '▶ play'}
-          </button>
-          <button onClick={() => setCursor(c => Math.min(c + 1, events.length - 1))} disabled={events.length === 0 || cursor >= events.length - 1}>
-            step ⏭
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(events.length - 1, 0)}
-            value={Math.max(cursor, 0)}
-            onChange={e => {
-              setPlaying(false);
-              setCursor(Number(e.target.value));
-            }}
-            style={{ width: 220 }}
-          />
-          <span style={{ color: '#9ca3af', minWidth: 60 }}>
-            {Math.max(cursor + 1, 0)}/{events.length}
-          </span>
+          {mode === 'replay' ? (
+            <>
+              <button onClick={() => setReplayCursor(0)} disabled={events.length === 0}>
+                ⏮
+              </button>
+              <button onClick={() => setPlaying(p => !p)} disabled={events.length === 0}>
+                {playing ? '⏸ pause' : '▶ play'}
+              </button>
+              <button
+                onClick={() => setReplayCursor(c => Math.min(c + 1, events.length - 1))}
+                disabled={events.length === 0 || replayCursor >= events.length - 1}
+              >
+                step ⏭
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(events.length - 1, 0)}
+                value={Math.max(replayCursor, 0)}
+                onChange={e => {
+                  setPlaying(false);
+                  setReplayCursor(Number(e.target.value));
+                }}
+                style={{ width: 220 }}
+              />
+              <span style={{ color: '#9ca3af', minWidth: 60 }}>
+                {Math.max(replayCursor + 1, 0)}/{events.length}
+              </span>
+            </>
+          ) : (
+            <span style={{ color: '#9ca3af', minWidth: 60 }}>{events.length} events</span>
+          )}
         </div>
       </div>
 
@@ -206,7 +290,9 @@ export function App() {
             <div style={{ color: '#6b7280' }}>no events yet at this cursor position</div>
           )
         ) : (
-          <div style={{ color: '#6b7280' }}>click a node to inspect its message/usage feed (log: {logUrl})</div>
+          <div style={{ color: '#6b7280' }}>
+            click a node to inspect its message/usage feed ({mode === 'live' ? `live: ${bridgeUrl}` : `log: ${logUrl}`})
+          </div>
         )}
       </div>
     </div>
