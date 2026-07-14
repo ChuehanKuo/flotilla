@@ -17,3 +17,4 @@ export {
 } from './drivers/specs.js';
 export { ClaudeCodeDriver, type ClaudeCodeDriverOptions } from './drivers/claudeCode.js';
 export { CodexDriver, type CodexDriverOptions } from './drivers/codex.js';
+export { McpClaudeDriver, MCP_TOOL_GUIDANCE, type McpClaudeDriverOptions, type McpToolEvent } from './drivers/mcpClaude.js';
