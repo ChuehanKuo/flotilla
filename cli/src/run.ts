@@ -63,6 +63,27 @@ export async function runMission(order: string, opts: { budget?: string; mission
       return 1;
     }
   }
+  if (kindsUsed.has('custom')) {
+    // WHY only ENOENT/"command not found" fails preflight here: claude/codex are
+    // both known to support --version, so any failure there is suspicious. A
+    // user-supplied CLI has no such guarantee — many agent CLIs lack --version
+    // entirely — so this check exists only to catch the common typo'd/not-
+    // installed command, not to demand every BYO CLI implement --version.
+    const customRefs = [config.models.captain, ...config.models.crew].filter(ref => ref.driver === 'custom');
+    for (const ref of customRefs) {
+      if (!ref.spec) { console.error(pc.red('custom driver requires a spec')); return 1; }
+      try { await execFile(ref.spec.command, ['--version'], { timeout: 10_000 }); }
+      catch (err: any) {
+        const notFound = err?.code === 'ENOENT' || /command not found/i.test(String(err?.message ?? ''));
+        if (notFound) {
+          console.error(pc.red(`'${ref.spec.command}' CLI not found — install it, or switch this node's driver to 'api'`));
+          return 1;
+        }
+        // any other failure (e.g. the CLI has no --version flag) means the
+        // binary exists and ran — proceed.
+      }
+    }
+  }
 
   const missionsDir = opts.missionsDir ?? './missions';
   const mission = new Mission(order, config, { driverFactory: realDriverFactory, missionsDir });

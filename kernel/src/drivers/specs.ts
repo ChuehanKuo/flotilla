@@ -3,7 +3,6 @@
 // subprocess stdout is parsed into transcript/displayText/sessionId/usage. A
 // CliDriverSpec factors exactly those two axes out so CliDriver can own the one
 // shared turn loop, and claude-code/codex become data (presets) rather than code.
-import { PROTOCOL_INSTRUCTIONS } from '../protocol.js';
 
 // Context handed to a spec's arg builders. `protocol` is PROTOCOL_INSTRUCTIONS,
 // passed in so a spec that needs it (claude appends it to the first-turn system
@@ -36,6 +35,9 @@ export interface CliParseResult {
 // firstArgs vs resumeArgs) and hands it down here. Specs that don't care
 // (claude) ignore it; the arg is optional so a parse can still be called with
 // only stdout.
+// WHY worth flagging here: omitting ctx disables first-turn-only guards (e.g.
+// CODEX_SPEC's missing-session-id check) — CliDriver always supplies it, but an
+// external caller invoking a preset's parse(stdout) directly does not get one.
 export interface CliParseCtx { isFirstTurn: boolean }
 
 export interface CliDriverSpec {

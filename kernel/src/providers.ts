@@ -5,6 +5,7 @@ import type { ModelRef, NodeRef } from './types.js';
 import { AiSdkDriver, type TurnDriver } from './driver.js';
 import { ClaudeCodeDriver } from './drivers/claudeCode.js';
 import { CodexDriver } from './drivers/codex.js';
+import { CliDriver } from './drivers/cliDriver.js';
 
 export type ModelFactory = (ref: ModelRef) => LanguageModel;
 
@@ -21,6 +22,10 @@ export type DriverFactory = (ref: NodeRef, ctx: { workspaceDir: string }) => Tur
 export const realDriverFactory: DriverFactory = (ref, ctx) => {
   if (ref.driver === 'claude-code') return new ClaudeCodeDriver({ workspaceDir: ctx.workspaceDir });
   if (ref.driver === 'codex') return new CodexDriver({ workspaceDir: ctx.workspaceDir });
+  if (ref.driver === 'custom') {
+    if (!ref.spec) throw new Error('custom driver requires a spec');
+    return new CliDriver(ref.spec, { workspaceDir: ctx.workspaceDir });
+  }
   const provider = ref.provider ?? 'anthropic';
   return new AiSdkDriver(realModelFactory({ provider, model: ref.model ?? 'unset' }));
 };
