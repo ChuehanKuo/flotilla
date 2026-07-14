@@ -4,7 +4,10 @@
 // (both what's already on disk at startup and everything appended after)
 // to the webview via Tauri's event system. The frontend's `tauri` mode in
 // eventSource.ts consumes exactly this: a `get_snapshot` command for the
-// race-free initial catch-up, plus a `flota-event` stream for what's new.
+// race-free initial catch-up, a `flota-snapshot` event re-emitted whenever
+// the watcher auto-follows a newer mission (so the webview resets its fold
+// and seq ceiling instead of mixing two missions together), plus a
+// `flota-event` stream for what's new within the current mission.
 use notify::{recommended_watcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::fs;
@@ -180,13 +183,32 @@ fn spawn_watcher(app_handle: tauri::AppHandle, shared: SharedMissionState) {
             if let Some((id, file)) = newest_mission(&missions_dir) {
                 let is_new_mission = current.as_ref().map(|(cid, _)| cid != &id).unwrap_or(true);
                 if is_new_mission {
+                    // Read whatever's already on disk for the new mission up
+                    // front and EMIT it as a fresh `flota-snapshot`, mirroring
+                    // devBridge.mjs's switchTo() (which re-broadcasts a
+                    // snapshot on mission switch). Without this, the webview
+                    // only saw a bare status change and kept its OLD
+                    // mission's seq ceiling, so the new mission's events
+                    // (seqs restarting at 1) were silently dropped as
+                    // "already covered by the snapshot" and any survivors
+                    // got folded onto the old mission's state.
+                    let initial_events = fs::read_to_string(&file)
+                        .map(|text| parse_complete_lines(&text))
+                        .unwrap_or_default();
+                    known_lines = initial_events.len();
                     current = Some((id.clone(), file));
-                    known_lines = 0;
                     {
                         let mut st = shared.0.lock().unwrap();
                         st.mission_id = Some(id.clone());
-                        st.events.clear();
+                        st.events = initial_events.clone();
                     }
+                    let _ = app_handle.emit(
+                        "flota-snapshot",
+                        SnapshotPayload {
+                            mission_id: Some(id.clone()),
+                            events: initial_events,
+                        },
+                    );
                     let _ = app_handle.emit(
                         "flota-status",
                         StatusPayload {

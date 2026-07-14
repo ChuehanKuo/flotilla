@@ -139,6 +139,10 @@ export function createLiveSource(url: string, opts: LiveSourceOptions = {}): Fle
 // file-watcher in src-tauri/src/lib.rs (which replaces this dev bridge when
 // the app is bundled). Wire protocol (see lib.rs):
 //   invoke('get_snapshot') -> { missionId, events }   -- pulled on demand
+//   listen('flota-snapshot', ...) -> { missionId, events } -- re-sent whenever
+//                                                the watcher auto-follows a
+//                                                newer mission, same shape as
+//                                                the initial invoke result
 //   listen('flota-event', ...)  -> { missionId, event }  -- one new event
 //   listen('flota-status', ...) -> { status, detail? }
 //
@@ -149,12 +153,21 @@ export function createLiveSource(url: string, opts: LiveSourceOptions = {}): Fle
 // `seq` once it lands (the snapshot is authoritative for every seq it
 // covers), then flush whatever's left. Never drops or duplicates an event
 // regardless of emit/listen ordering.
+//
+// Mission-switch handling: a `flota-snapshot` is authoritative each time it
+// arrives (initial catch-up AND every later mission switch), so applying one
+// always RESETS the seq ceiling to that snapshot's own max seq instead of
+// extending the previous one. Without the reset, a switch to a newer mission
+// (whose seqs restart at 1) would look like every new event is "already
+// covered" by the old mission's much higher ceiling, and they'd be silently
+// dropped — the exact bug this module's tests guard against.
 export function createTauriSource(): FleetEventSource {
   return {
     subscribe(onMessage) {
       let cancelled = false;
       let unlistenEvent: (() => void) | undefined;
       let unlistenStatus: (() => void) | undefined;
+      let unlistenSnapshot: (() => void) | undefined;
 
       onMessage({ type: 'status', status: 'connecting' });
 
@@ -163,8 +176,24 @@ export function createTauriSource(): FleetEventSource {
         if (cancelled) return;
 
         let gotSnapshot = false;
-        let snapshotSeqCeiling = -1; // highest `seq` already delivered via the snapshot
+        let snapshotSeqCeiling = -1; // highest `seq` covered by the most recent snapshot
         const buffered: { missionId?: string; event: FleetEvent }[] = [];
+
+        // Shared by the initial get_snapshot result and every later
+        // flota-snapshot event: reset (not extend) the ceiling, forward a
+        // fold-replacing 'snapshot' message to App, then flush anything that
+        // arrived via 'flota-event' before this snapshot landed.
+        function applySnapshot(missionId: string | undefined, events: FleetEvent[]) {
+          gotSnapshot = true;
+          snapshotSeqCeiling = -1;
+          for (const e of events) if (e.seq > snapshotSeqCeiling) snapshotSeqCeiling = e.seq;
+          onMessage({ type: 'snapshot', missionId, events });
+          const pending = buffered.splice(0, buffered.length);
+          for (const { missionId: bMissionId, event } of pending) {
+            if (event.seq <= snapshotSeqCeiling) continue;
+            onMessage({ type: 'event', missionId: bMissionId, event });
+          }
+        }
 
         unlistenEvent = await listen<{ missionId?: string; event: FleetEvent }>('flota-event', e => {
           const { missionId, event } = e.payload;
@@ -172,7 +201,7 @@ export function createTauriSource(): FleetEventSource {
             buffered.push({ missionId, event });
             return;
           }
-          if (event.seq <= snapshotSeqCeiling) return; // already included in the snapshot
+          if (event.seq <= snapshotSeqCeiling) return; // already included in the latest snapshot
           onMessage({ type: 'event', missionId, event });
         });
         if (cancelled) {
@@ -191,23 +220,30 @@ export function createTauriSource(): FleetEventSource {
           return;
         }
 
+        // Attached before the initial get_snapshot invoke resolves, in case
+        // the watcher switches missions in that window.
+        unlistenSnapshot = await listen<{ missionId?: string; events: FleetEvent[] }>('flota-snapshot', e => {
+          applySnapshot(e.payload.missionId, e.payload.events);
+        });
+        if (cancelled) {
+          unlistenSnapshot();
+          return;
+        }
+
         const snapshot = await invoke<{ missionId?: string; events: FleetEvent[] }>('get_snapshot');
         if (cancelled) return;
-        gotSnapshot = true;
-        for (const e of snapshot.events) if (e.seq > snapshotSeqCeiling) snapshotSeqCeiling = e.seq;
-        onMessage({ type: 'snapshot', missionId: snapshot.missionId, events: snapshot.events });
+        // A 'flota-snapshot' may have already landed (and is at least as
+        // fresh, since both read the same server-side mutex-guarded state)
+        // — don't clobber it with this possibly-earlier invoke result.
+        if (!gotSnapshot) applySnapshot(snapshot.missionId, snapshot.events);
         onMessage({ type: 'status', status: 'open' });
-
-        for (const { missionId, event } of buffered) {
-          if (event.seq <= snapshotSeqCeiling) continue;
-          onMessage({ type: 'event', missionId, event });
-        }
       })().catch(e => onMessage({ type: 'status', status: 'error', detail: String(e) }));
 
       return () => {
         cancelled = true;
         unlistenEvent?.();
         unlistenStatus?.();
+        unlistenSnapshot?.();
       };
     },
   };
