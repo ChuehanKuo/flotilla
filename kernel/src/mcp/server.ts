@@ -121,6 +121,7 @@ export class FlotaMcpServer {
   private tokens = new TokenStore<McpNodeContext>();
   private app = express();
   private httpServer?: HttpServer;
+  private wantStop = false;
 
   constructor() {
     // WHY 10mb: deliver carries a node's complete work product (a code file or
@@ -174,17 +175,35 @@ export class FlotaMcpServer {
 
   start(): Promise<{ url: string; port: number }> {
     return new Promise((resolve) => {
-      this.httpServer = this.app.listen(0, '127.0.0.1', () => {
-        const addr = this.httpServer!.address();
+      const srv = this.app.listen(0, '127.0.0.1', () => {
+        // WHY honour a stop() that raced ahead of 'listening': a caller can
+        // stop()/cancel() synchronously in the same tick as start() (e.g.
+        // Mission.cancel() right after Mission.start()), before this callback
+        // fires. stop() below can't close a not-yet-listening server, so it
+        // sets wantStop; we close here the instant we ARE listening. The
+        // start() promise still resolves so the caller's `await` unblocks
+        // (then sees mission.done and bails) instead of hanging forever.
+        const addr = srv.address();
         const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+        if (this.wantStop) srv.close();
         resolve({ url: `http://127.0.0.1:${port}/mcp`, port });
       });
+      this.httpServer = srv;
     });
   }
 
   stop(): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.httpServer) {
+        resolve();
+        return;
+      }
+      // WHY the listening guard: http.Server.close() called before the
+      // 'listening' event never invokes its callback with success and can
+      // suppress 'listening' entirely — the close would hang. Defer to the
+      // start() callback (via wantStop) when we're mid-bind.
+      if (!this.httpServer.listening) {
+        this.wantStop = true;
         resolve();
         return;
       }

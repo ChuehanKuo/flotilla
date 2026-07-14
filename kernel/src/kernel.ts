@@ -8,6 +8,7 @@ import { AgentNode } from './node.js';
 import { makeFileTools } from './tools/files.js';
 import { makeCoordinationTools, type KernelApi } from './tools/coordination.js';
 import { FlotaMcpServer } from './mcp/server.js';
+import type { TurnDriver } from './driver.js';
 import type { DriverFactory, DriverFactoryCtx } from './providers.js';
 import type { DriverKind, FleetMessage, MissionConfig, NodeRef, Provider, TaskState } from './types.js';
 
@@ -47,6 +48,12 @@ export class Mission {
   // it) and keeps one mission's nodes from ever reaching another's.
   private mcpServer?: FlotaMcpServer;
   private mcpUrl?: string;
+  // WHY track drivers by nodeId: some drivers (McpCodexDriver) hold a
+  // per-instance temp resource (a mkdtemp'd CODEX_HOME) that must be disposed
+  // on mission end — finish() sweeps this map and calls cleanup() on any
+  // driver that has one. Keyed by nodeId so a per-node dispose is also
+  // possible if ever needed.
+  private drivers = new Map<string, TurnDriver>();
   private abort = new AbortController();
   private escalationCb?: (e: { taskId: string; from: string; text: string }) => void;
   private resolveResult!: (r: MissionResult) => void;
@@ -106,6 +113,12 @@ export class Mission {
     // spawn, right below) can be constructed.
     this.mcpServer = new FlotaMcpServer();
     ({ url: this.mcpUrl } = await this.mcpServer.start());
+    // WHY this guard: a synchronous cancel() in the same tick as start() runs
+    // finish() (done=true, stop()) DURING the await above. Proceeding here
+    // would append mission.started AFTER mission.canceled, spawn a captain
+    // into a dead mission, and install a watchdog interval finish() already
+    // ran past clearing. Bail to the already-resolved (canceled) promise.
+    if (this.done) return promise;
     this.log.append('mission.started', { order: this.order, config: { budgetUsd: this.config.budgetUsd, maxDepth: this.config.maxDepth } });
     const captainId = this.spawn('operator', 1, true, 'captain', CAPTAIN_CHARTER, this.config.models.captain);
     this.route({ kind: 'ORDER', from: 'operator', to: captainId, taskId: this.nodes.get(captainId)!.spec.taskId, text: this.order });
@@ -122,6 +135,16 @@ export class Mission {
     if (this.timers.watchdog) clearInterval(this.timers.watchdog);
     if (this.timers.timeout) clearTimeout(this.timers.timeout);
     this.abort.abort();
+    // WHY dispose drivers here: McpCodexDriver mkdtemp's a per-instance
+    // CODEX_HOME in its constructor that leaks a temp dir per codex node
+    // unless cleanup() is called. Duck-typed (only McpCodexDriver has it) and
+    // best-effort — a throwing cleanup must not block mission teardown.
+    for (const driver of this.drivers.values()) {
+      const cleanup = (driver as { cleanup?: () => void }).cleanup;
+      if (typeof cleanup === 'function') {
+        try { cleanup.call(driver); } catch { /* best-effort teardown */ }
+      }
+    }
     // WHY fire-and-forget, not awaited: finish() runs synchronously from many
     // contexts (a route() DELIVER-to-operator called from inside the MCP
     // server's own tool handler mid-request, a setTimeout callback, a catch
@@ -185,10 +208,19 @@ export class Mission {
       ? {}
       : { ...makeCoordinationTools({ nodeId, taskId, parentId, captain }, api), ...(captain ? {} : makeFileTools(this.workspaceDir)) };
 
-    const node = new AgentNode(
+    // WHY build the driver/node inside a try that unregisters on throw: for
+    // an MCP node the token is already issued (above), but a throwing
+    // driverFactory (e.g. a missing spec) or AgentNode constructor would
+    // orphan it — a live credential for a node that never entered this.nodes.
+    // Revoke it before rethrowing so no unreachable token survives.
+    let node: AgentNode;
+    let driver: TurnDriver;
+    try {
+      driver = this.deps.driverFactory(ref, driverCtx);
+      node = new AgentNode(
       { id: nodeId, parentId, role, charter: captain ? charter : charter + CREW_SUFFIX, taskId, depth, captain },
       {
-        driver: this.deps.driverFactory(ref, driverCtx),
+        driver,
         tools,
         log: this.log,
         maxStepsPerTurn: this.config.maxStepsPerTurn,
@@ -216,7 +248,11 @@ export class Mission {
         onModelFailure: (id, error) => this.handleModelFailure(id, error),
         abortSignal: this.abort.signal,
       },
-    );
+      );
+    } catch (err) {
+      if (isMcpNode) this.mcpServer?.unregisterNode(nodeId);
+      throw err;
+    }
     // WHY node construction happens before these events are appended: a
     // throw inside AgentNode's constructor (e.g. a bad driver spec) must not
     // leave node.spawned/task.state events in the log for a node that never
@@ -224,6 +260,7 @@ export class Mission {
     this.log.append('node.spawned', { nodeId, parentId: parentId === 'operator' ? undefined : parentId, role, driver: ref.driver, provider: ref.provider, model: ref.model, taskId });
     this.log.append('task.state', { taskId, parentTaskId, assignee: nodeId, state: 'submitted' });
     this.nodes.set(nodeId, node);
+    this.drivers.set(nodeId, driver);
     return nodeId;
   }
 
@@ -294,6 +331,14 @@ export class Mission {
         break;
       case 'DELIVER': {
         this.log.append('task.state', { taskId: resolved.taskId, state: 'completed' });
+        // WHY revoke here: the delivering node's task is now terminal, but its
+        // CLI subprocess may still be running and holding a live token — a
+        // second deliver/delegate from it would re-complete the task or spawn
+        // a stray child. Revoking makes any further MCP call from that node a
+        // 401. (mission.finish() below stops the whole server for the
+        // operator-DELIVER case, so this matters most for crew delivers that
+        // leave the mission running.)
+        this.disposeTerminalNode(resolved.taskId);
         if (resolved.to === 'operator') {
           this.finish({ status: 'completed', result: resolved.text, totalCostUsd: this.budget.totalUsd }, 'mission.completed', { result: resolved.text });
         } else {
@@ -302,6 +347,14 @@ export class Mission {
         break;
       }
     }
+  }
+
+  // Revoke the MCP token of the node that owns a now-terminal task, so its
+  // still-running subprocess can't act again. A no-op for api/custom nodes
+  // (they were never registered — TokenStore.revoke ignores unknown ids).
+  private disposeTerminalNode(taskId: string): void {
+    const node = [...this.nodes.values()].find(n => n.spec.taskId === taskId);
+    if (node) this.mcpServer?.unregisterNode(node.spec.id);
   }
 
   private handleTurnEnd(nodeId: string, finalText: string): void {
@@ -348,6 +401,8 @@ export class Mission {
     }
     const node = this.nodes.get(nodeId)!;
     this.log.append('task.state', { taskId: node.spec.taskId, state: 'failed' });
+    // A failed node's task is terminal — revoke its token like a DELIVER does.
+    this.disposeTerminalNode(node.spec.taskId);
     this.route({ kind: 'ESCALATE', from: nodeId, to: node.spec.parentId, taskId: node.spec.taskId, text: `node failed after retry: ${error}` });
   }
 }

@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import type { ToolSet } from 'ai';
 import { realModelFactory, realDriverFactory } from '../src/providers.js';
 import { CliDriver } from '../src/drivers/cliDriver.js';
+import { McpClaudeDriver } from '../src/drivers/mcpClaude.js';
+import { McpCodexDriver } from '../src/drivers/mcpCodex.js';
 import type { CliDriverSpec, CliParseResult } from '../src/drivers/specs.js';
 import type { NodeRef } from '../src/types.js';
 import type { TurnInput } from '../src/driver.js';
@@ -84,5 +86,30 @@ describe('realDriverFactory — custom driver kind', () => {
   it('driver:"custom" with no spec throws a clear error', () => {
     const ref: NodeRef = { driver: 'custom' };
     expect(() => realDriverFactory(ref, { workspaceDir: '/tmp' })).toThrow('custom driver requires a spec');
+  });
+});
+
+// M5 hits this seam first: realDriverFactory routes the two subscription CLI
+// kinds to their MCP drivers, given the per-node mcpUrl/token the mission
+// threads in. mcpMission.test.ts injects its own factory (to point `bin` at a
+// stub), so nothing else exercises the real branch — these do.
+describe('realDriverFactory — MCP driver kinds', () => {
+  const mcpCtx = { workspaceDir: '/tmp', mcpUrl: 'http://127.0.0.1:1/mcp', token: 'tok' };
+
+  it('driver:"claude-code" with mcpUrl+token yields an McpClaudeDriver', () => {
+    expect(realDriverFactory({ driver: 'claude-code' }, mcpCtx)).toBeInstanceOf(McpClaudeDriver);
+  });
+
+  it('driver:"codex" with mcpUrl+token yields an McpCodexDriver', () => {
+    // McpCodexDriver mkdtemp's a CODEX_HOME in its constructor — clean it up.
+    const driver = realDriverFactory({ driver: 'codex' }, mcpCtx);
+    expect(driver).toBeInstanceOf(McpCodexDriver);
+    (driver as McpCodexDriver).cleanup();
+  });
+
+  it('claude-code/codex without mcpUrl or token throw a clear error', () => {
+    expect(() => realDriverFactory({ driver: 'claude-code' }, { workspaceDir: '/tmp' })).toThrow(/mcpUrl\/token/);
+    expect(() => realDriverFactory({ driver: 'claude-code' }, { workspaceDir: '/tmp', mcpUrl: 'x' })).toThrow(/mcpUrl\/token/);
+    expect(() => realDriverFactory({ driver: 'codex' }, { workspaceDir: '/tmp', token: 'y' })).toThrow(/mcpUrl\/token/);
   });
 });
