@@ -101,7 +101,9 @@ function textOfBlock(block: StreamContentBlock, event: StreamEvent): string | un
 // tool_result events (new — the MCP-mode observability this driver adds) plus
 // the same session_id/usage/final-text fields the fenced-JSON claude spec
 // pulls, but never scans for a ```flota block: there is none to find.
-function parseMcpClaudeStdout(stdout: string): ParsedMcpTurn {
+// Exported for a direct unit test of the is_error path (the round-trip stub
+// never exercises a failed tool_result).
+export function parseMcpClaudeStdout(stdout: string): ParsedMcpTurn {
   const events: McpToolEvent[] = [];
   let lastAssistantText: string | undefined;
   let lastAssistantSessionId: string | undefined;
@@ -241,22 +243,42 @@ export class McpClaudeDriver implements TurnDriver {
     // execFile call (inherits process.env for CLI auth/session) but drops the
     // fenced-JSON queue entirely — tool results already fed back into the
     // agent's own loop over HTTP during the run, nothing to re-inject next turn.
-    const { stdout } = await execFile(this.opts.bin ?? 'claude', args, {
-      cwd: this.opts.workspaceDir,
-      signal: input.abortSignal,
-      timeout: this.opts.timeoutMs ?? 600_000,
-      maxBuffer: 10 * 2 ** 20,
-    });
+    // WHY the try/catch here (unlike CliDriver): a failed execFile rejects with
+    // Error.message and Error.cmd containing the FULL argv — including the
+    // `--mcp-config` JSON with the node's bearer token. node.ts does
+    // onModelFailure(id, String(err)), which would land the token verbatim in
+    // the event log and any escalation. Redact it before it propagates.
+    let stdout: string;
+    try {
+      ({ stdout } = await execFile(this.opts.bin ?? 'claude', args, {
+        cwd: this.opts.workspaceDir,
+        signal: input.abortSignal,
+        timeout: this.opts.timeoutMs ?? 600_000,
+        maxBuffer: 10 * 2 ** 20,
+      }));
+    } catch (err) {
+      throw this.redactToken(err);
+    }
 
-    // WHY no try/catch: an unparseable/empty stream throws inside parse — let
-    // it propagate so the node's retry-then-escalate machinery handles it,
-    // same contract as CliDriver.
+    // WHY no try/catch around parse: an unparseable/empty stream throws inside
+    // it — let that propagate so the node's retry-then-escalate machinery
+    // handles it, same contract as CliDriver. (No token in a parse error.)
     const result = parseMcpClaudeStdout(stdout);
 
     if (result.sessionId) this.sessionId = result.sessionId;
+    // WHY push OUTSIDE the try, invoke INSIDE: the toolEvents snapshot must be
+    // complete regardless of a throwing consumer, but a throwing onToolEvent
+    // (M4 wires a logging hook here) must NOT reject the turn — the CLI run
+    // already completed its HTTP side effects (delegate already fired in the
+    // kernel), so a reject would trigger callDriverWithRetry to re-run the
+    // whole turn and double-fire every side-effecting tool.
     for (const event of result.events) {
       this.events.push(event);
-      this.opts.onToolEvent?.(event);
+      try {
+        this.opts.onToolEvent?.(event);
+      } catch (err) {
+        console.error('flota: onToolEvent handler threw (swallowed to protect the turn):', err);
+      }
     }
 
     return {
@@ -265,5 +287,24 @@ export class McpClaudeDriver implements TurnDriver {
       usage: result.usage,
       billing: 'subscription',
     };
+  }
+
+  // WHY redact both the raw token AND the whole --mcp-config JSON: execFile's
+  // rejection stringifies the entire argv into err.message and err.cmd, so the
+  // token appears both bare (inside the Bearer header) and embedded in the
+  // JSON blob. Replacing the token string alone leaves the surrounding config
+  // (url, header structure) exposed and risks a partial match; replacing the
+  // literal mcp-config value the driver built guarantees the token can't
+  // survive in either field. Mutates a shallow-cloned Error so the original
+  // stack is preserved for debugging.
+  private redactToken(err: unknown): unknown {
+    if (!(err instanceof Error)) return err;
+    const token = this.opts.token;
+    const scrub = (s: string): string =>
+      s.split(token).join('<redacted>');
+    err.message = scrub(err.message);
+    const cmd = (err as { cmd?: unknown }).cmd;
+    if (typeof cmd === 'string') (err as { cmd?: string }).cmd = scrub(cmd);
+    return err;
   }
 }

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ToolSet } from 'ai';
-import { McpClaudeDriver, MCP_TOOL_GUIDANCE, type McpToolEvent } from '../src/drivers/mcpClaude.js';
+import { McpClaudeDriver, MCP_TOOL_GUIDANCE, parseMcpClaudeStdout, type McpToolEvent } from '../src/drivers/mcpClaude.js';
 import { FlotaMcpServer, type McpNodeContext } from '../src/mcp/server.js';
 import type { KernelApi } from '../src/tools/coordination.js';
 import type { TurnInput } from '../src/driver.js';
@@ -171,5 +171,71 @@ describe('McpClaudeDriver', () => {
     );
     expect(badDriver.toolEvents).toEqual([]);
     expect(api.delegate).not.toHaveBeenCalled();
+  });
+
+  it('a throwing onToolEvent does NOT reject the turn (protects against double-fired side effects on retry)', async () => {
+    const api = fakeApi();
+    const ctx: McpNodeContext = { nodeId: 'captain', role: 'captain', api, taskId: 't1' };
+    const token = server.registerNode(ctx);
+
+    const driver = new McpClaudeDriver({
+      workspaceDir,
+      mcpUrl: url,
+      token,
+      bin: FIXTURE,
+      onToolEvent: () => { throw new Error('logging hook blew up'); },
+    });
+
+    // The turn completes normally despite the throwing consumer — no re-run.
+    const out = await driver.turn(turnInput('scan'));
+    expect(out.text).toBe('Delegated: spawned crew-1 (task t2)');
+    expect(api.delegate).toHaveBeenCalledTimes(1); // fired once, not twice
+
+    // The snapshot is still complete — push happens outside the guarded call.
+    expect(driver.toolEvents).toEqual([
+      { type: 'tool_use', toolUseId: 'toolu_fake_001', name: 'mcp__flota__delegate', input: { role: 'metrics-scan', charter: 'scan the repo', task: 'find dead code' } },
+      { type: 'tool_result', toolUseId: 'toolu_fake_001', text: 'spawned crew-1 (task t2)', isError: undefined },
+    ]);
+  });
+
+  it('a failed execFile does NOT leak the bearer token in the thrown error', async () => {
+    const api = fakeApi();
+    const ctx: McpNodeContext = { nodeId: 'captain', role: 'captain', api, taskId: 't1' };
+    const token = server.registerNode(ctx);
+
+    // A stub that exits non-zero: execFile rejects with Error.message/.cmd
+    // carrying the full argv, including the --mcp-config JSON with the token.
+    const failBin = join(workspaceDir, 'failing-claude.sh');
+    writeFileSync(failBin, '#!/usr/bin/env bash\nexit 1\n', { mode: 0o755 });
+    const driver = new McpClaudeDriver({ workspaceDir, mcpUrl: url, token, bin: failBin });
+
+    let caught: unknown;
+    try {
+      await driver.turn(turnInput('scan'));
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const e = caught as Error & { cmd?: string };
+    // The token must appear nowhere in the surfaced error (node.ts does
+    // onModelFailure(id, String(err)) straight into the event log).
+    expect(token.length).toBeGreaterThan(0);
+    expect(e.message).not.toContain(token);
+    expect(e.cmd ?? '').not.toContain(token);
+    expect(e.message).toContain('<redacted>'); // proves redaction ran, not just an absent token
+  });
+
+  it('parser: a tool_result with is_error:true yields isError:true', () => {
+    // The round-trip stub never exercises a failed tool_result — pin the parse
+    // path directly without a real CLI.
+    const stdout = [
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu1', name: 'mcp__flota__deliver', input: { text: 'x' } }] }, session_id: 's1' }),
+      JSON.stringify({ type: 'user', message: { content: [{ tool_use_id: 'tu1', type: 'tool_result', is_error: true, content: [{ type: 'text', text: 'boom' }] }] } }),
+      JSON.stringify({ type: 'result', subtype: 'success', result: 'done', session_id: 's1', usage: { input_tokens: 1, output_tokens: 1 } }),
+    ].join('\n');
+
+    const parsed = parseMcpClaudeStdout(stdout);
+    const toolResult = parsed.events.find(e => e.type === 'tool_result');
+    expect(toolResult).toEqual({ type: 'tool_result', toolUseId: 'tu1', text: 'boom', isError: true });
   });
 });
