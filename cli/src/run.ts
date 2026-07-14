@@ -7,7 +7,14 @@ import { formatEvent } from './render.js';
 
 const execFile = promisify(execFileCb);
 
-export async function runMission(order: string, opts: { budget?: string; missionsDir?: string }): Promise<number> {
+export interface BuildMissionOpts { budget?: string; missionsDir?: string }
+export interface BuiltMission { mission: Mission; missionsDir: string }
+
+// Shared by both the default (TUI) and --headless `run` paths: config build,
+// budget/model validation, and preflight (missing CLI / missing API key)
+// checks. Returns null (having already printed the error) on any preflight
+// failure so both callers can just exit 1 without duplicating the checks.
+export async function buildMission(order: string, opts: BuildMissionOpts): Promise<BuiltMission | null> {
   const config = defaultConfig();
   if (opts.budget !== undefined) {
     const cap = Number(opts.budget);
@@ -15,7 +22,7 @@ export async function runMission(order: string, opts: { budget?: string; mission
     // false — an unvalidated --budget would silently disable the hard cap.
     if (!Number.isFinite(cap) || cap <= 0) {
       console.error(pc.red(`--budget must be a positive number, got '${opts.budget}'`));
-      return 1;
+      return null;
     }
     config.budgetUsd = cap;
   }
@@ -44,7 +51,7 @@ export async function runMission(order: string, opts: { budget?: string; mission
     const providersUsed = new Set(apiRefs.map(ref => ref.provider ?? 'anthropic'));
     for (const p of providersUsed) {
       const key = p === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
-      if (!process.env[key]) { console.error(pc.red(`missing ${key} in environment`)); return 1; }
+      if (!process.env[key]) { console.error(pc.red(`missing ${key} in environment`)); return null; }
     }
   }
   if (kindsUsed.has('claude-code')) {
@@ -52,7 +59,7 @@ export async function runMission(order: string, opts: { budget?: string; mission
     catch (err: any) {
       const timedOut = err?.killed ? ' (timed out)' : '';
       console.error(pc.red(`'claude' CLI not found or not working${timedOut} — install Claude Code and sign in, or switch this node's driver to 'api'`));
-      return 1;
+      return null;
     }
   }
   if (kindsUsed.has('codex')) {
@@ -60,7 +67,7 @@ export async function runMission(order: string, opts: { budget?: string; mission
     catch (err: any) {
       const timedOut = err?.killed ? ' (timed out)' : '';
       console.error(pc.red(`'codex' CLI not found or not working${timedOut} — install the Codex CLI and sign in, or switch this node's driver to 'api'`));
-      return 1;
+      return null;
     }
   }
   if (kindsUsed.has('custom')) {
@@ -71,13 +78,13 @@ export async function runMission(order: string, opts: { budget?: string; mission
     // installed command, not to demand every BYO CLI implement --version.
     const customRefs = [config.models.captain, ...config.models.crew].filter(ref => ref.driver === 'custom');
     for (const ref of customRefs) {
-      if (!ref.spec) { console.error(pc.red('custom driver requires a spec')); return 1; }
+      if (!ref.spec) { console.error(pc.red('custom driver requires a spec')); return null; }
       try { await execFile(ref.spec.command, ['--version'], { timeout: 10_000 }); }
       catch (err: any) {
         const notFound = err?.code === 'ENOENT' || /command not found/i.test(String(err?.message ?? ''));
         if (notFound) {
           console.error(pc.red(`'${ref.spec.command}' CLI not found — install it, or switch this node's driver to 'api'`));
-          return 1;
+          return null;
         }
         // any other failure (e.g. the CLI has no --version flag) means the
         // binary exists and ran — proceed.
@@ -87,6 +94,15 @@ export async function runMission(order: string, opts: { budget?: string; mission
 
   const missionsDir = opts.missionsDir ?? './missions';
   const mission = new Mission(order, config, { driverFactory: realDriverFactory, missionsDir });
+  return { mission, missionsDir };
+}
+
+// v0.1 behavior, unchanged: plain line-tail output + a blocking readline
+// prompt for escalations. Kept exactly as-is for --headless.
+export async function runMission(order: string, opts: BuildMissionOpts): Promise<number> {
+  const built = await buildMission(order, opts);
+  if (!built) return 1;
+  const { mission, missionsDir } = built;
   mission.log.subscribe(e => { const line = formatEvent(e); if (line) console.log(line); });
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });

@@ -92,4 +92,24 @@ describe('App', () => {
     mission.cancel('test done');
     await resultPromise;
   });
+
+  it('echoes typed input in the InputBar frame mid-typing, before Enter', async () => {
+    const mission = newMission([{ text: '' }]);
+    const resultPromise = mission.start();
+
+    const { lastFrame, stdin, unmount } = render(<App mission={mission} />);
+    await sleep(10);
+
+    stdin.write('i');
+    // type only half the intended text and check the frame NOW — pins that
+    // the buffer renders live, per keystroke, not just once at submit time.
+    for (const ch of 'go fas') stdin.write(ch);
+    await sleep(10);
+
+    expect(lastFrame() ?? '').toContain('go fas');
+
+    unmount();
+    mission.cancel('test done');
+    await resultPromise;
+  });
 });

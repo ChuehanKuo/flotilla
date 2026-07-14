@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef } from 'react';
-import { Box, useApp, useInput } from 'ink';
+import { Box, Text, useApp, useInput } from 'ink';
 import type { Mission } from '@flota/kernel';
-import { fleetRows, nodeFeed, initialUi, type UiState } from './viewModel.js';
+import { fleetRows, nodeFeed, initialUi, pickAnswerTarget, type UiState } from './viewModel.js';
 import { keyToAction, applyAction, inkKeyToKeyInput } from './keymap.js';
 import { FleetTree } from './components/FleetTree.js';
 import { Inspector } from './components/Inspector.js';
@@ -69,19 +69,33 @@ export function App({ mission }: AppProps) {
       // SUBMIT TIMING CONTRACT (keymap.ts): capture ui.input and the mode's
       // target BEFORE applyAction resets ui to browse/empty.
       const text = current.input;
+      const mode = current.mode;
       const targetNodeId = current.selectedNodeId;
-      const escalation = state.openEscalations.find(e => e.from === targetNodeId) ?? state.openEscalations[0];
+      // WHY mission.state() here, not the render-closure `state`: this
+      // handler fires on a raw keystroke and can run against a `state` that
+      // hasn't caught up with the latest log events yet (same staleness
+      // class the uiRef fix above addresses for ui, just for mission state).
+      const escalation = pickAnswerTarget(mission.state().openEscalations, targetNodeId);
       uiRef.current = applyAction(current, action, rows);
+      if (mode === 'instruct' && targetNodeId) {
+        const res = mission.instruct(targetNodeId, text);
+        if (!res.ok) uiRef.current = { ...uiRef.current, notice: res.reason };
+      } else if (mode === 'answer' && escalation) {
+        mission.answerEscalation(escalation.taskId, text);
+      }
       tick();
-      if (current.mode === 'instruct' && targetNodeId) mission.instruct(targetNodeId, text);
-      else if (current.mode === 'answer' && escalation) mission.answerEscalation(escalation.taskId, text);
       return;
     }
     if (action.type === 'kill') { mission.cancel('operator kill (TUI)'); return; }
     if (action.type === 'quit') { exit(); return; }
     uiRef.current = applyAction(current, action, rows);
+    // any action other than a (handled-above) submit clears a stale notice —
+    // keeps it transient without needing a timer.
+    if (current.notice) uiRef.current = { ...uiRef.current, notice: undefined };
     tick();
   });
+
+  const answerTarget = ui.mode === 'answer' ? pickAnswerTarget(state.openEscalations, ui.selectedNodeId) : undefined;
 
   return (
     <Box flexDirection="column">
@@ -92,7 +106,8 @@ export function App({ mission }: AppProps) {
         </Box>
         <Inspector nodeId={ui.selectedNodeId} lines={ui.selectedNodeId ? nodeFeed(mission.log.events, ui.selectedNodeId) : []} />
       </Box>
-      <InputBar mode={ui.mode} input={ui.input} />
+      <InputBar mode={ui.mode} input={ui.input} answerTarget={answerTarget} />
+      {ui.notice ? <Text color="red">! {ui.notice}</Text> : null}
     </Box>
   );
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EventLog, reduce } from '@flota/kernel';
-import { fleetRows, nodeFeed, initialUi } from '../src/viewModel.js';
+import type { EscalationView } from '@flota/kernel';
+import { fleetRows, nodeFeed, initialUi, pickAnswerTarget } from '../src/viewModel.js';
 
 function fleetLog(): EventLog {
   const log = new EventLog('m-1');
@@ -72,5 +73,23 @@ describe('nodeFeed', () => {
 describe('initialUi', () => {
   it('starts in browse mode, empty input, no selection', () => {
     expect(initialUi()).toEqual({ mode: 'browse', input: '', selectedNodeId: undefined });
+  });
+});
+
+describe('pickAnswerTarget', () => {
+  const fromCrew1: EscalationView = { taskId: 't1', from: 'crew-1', text: 'q1' };
+  const fromCrew2: EscalationView = { taskId: 't2', from: 'crew-2', text: 'q2' };
+
+  it('picks the open escalation raised by the selected node', () => {
+    expect(pickAnswerTarget([fromCrew1, fromCrew2], 'crew-2')).toBe(fromCrew2);
+  });
+
+  it('falls back to the first (oldest) open escalation when the selection doesn\'t match one', () => {
+    expect(pickAnswerTarget([fromCrew1, fromCrew2], 'captain')).toBe(fromCrew1);
+    expect(pickAnswerTarget([fromCrew1, fromCrew2], undefined)).toBe(fromCrew1);
+  });
+
+  it('returns undefined when there are no open escalations', () => {
+    expect(pickAnswerTarget([], 'crew-1')).toBeUndefined();
   });
 });

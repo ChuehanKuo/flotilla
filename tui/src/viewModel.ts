@@ -1,4 +1,4 @@
-import type { FleetEvent, FleetState, TaskState } from '@flota/kernel';
+import type { EscalationView, FleetEvent, FleetState, TaskState } from '@flota/kernel';
 
 export interface NodeRow {
   id: string;
@@ -14,6 +14,11 @@ export interface UiState {
   selectedNodeId?: string;
   mode: 'browse' | 'instruct' | 'answer';
   input: string;
+  // Transient operator-facing status (e.g. why mission.instruct() just
+  // declined), not a keystroke-driven UI mode — set/cleared by App.tsx
+  // directly rather than through keymap.ts's Action/applyAction, since
+  // nothing on the keyboard produces it.
+  notice?: string;
 }
 
 function isRootParent(parentId: string | undefined): boolean {
@@ -86,4 +91,13 @@ export function nodeFeed(events: FleetEvent[], nodeId: string): string[] {
 
 export function initialUi(): UiState {
   return { mode: 'browse', input: '', selectedNodeId: undefined };
+}
+
+// Which open escalation an answer-mode submit targets: the one raised by the
+// currently selected node, falling back to the oldest open escalation if the
+// selection doesn't match one (e.g. the operator selected a different node
+// than the one that escalated). Pure so both App.tsx's submit handler and its
+// pre-submit InputBar display can share one rule instead of drifting.
+export function pickAnswerTarget(openEscalations: EscalationView[], selectedNodeId: string | undefined): EscalationView | undefined {
+  return openEscalations.find(e => e.from === selectedNodeId) ?? openEscalations[0];
 }
