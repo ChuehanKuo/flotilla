@@ -164,6 +164,62 @@ describe('FlotaMcpServer', () => {
     expect(res.status).toBe(401);
   });
 
+  it('present-but-malformed Authorization gets 401', async () => {
+    const bodyInit = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+    const initBody = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'x', version: '0.0.1' } } });
+    const basic = await fetch(url, { method: 'POST', headers: { ...bodyInit, authorization: 'Basic xyz' }, body: initBody });
+    const bare = await fetch(url, { method: 'POST', headers: { ...bodyInit, authorization: 'Bearer' }, body: initBody });
+    expect(basic.status).toBe(401);
+    expect(bare.status).toBe(401);
+  });
+
+  it('deliver carries a >100kb payload without a 413 (body limit)', async () => {
+    const api = fakeApi();
+    const ctx: McpNodeContext = { nodeId: 'crew-1', role: 'crew', api, taskId: 't2' };
+    const token = server.registerNode(ctx);
+    const bigText = 'x'.repeat(200 * 1024); // 200kb — over express.json's 100kb default
+
+    const client = await connectedClient(url, token);
+    const result = await client.callTool({ name: 'deliver', arguments: { text: bigText } });
+
+    expect(textOf(result)).toBe('delivered');
+    expect(api.emitMessage).toHaveBeenCalledWith({ kind: 'DELIVER', from: 'crew-1', to: 'captain', taskId: 't2', text: bigText });
+    await client.close();
+  });
+
+  it('survives client-disconnect races without crashing the process', async () => {
+    // The write-after-disconnect rejection the POST handler's try/catch guards
+    // against is not synchronously inducible (the SDK+node stack handles aborts
+    // gracefully here). This asserts the behavioral invariant instead: a burst
+    // of aborted requests must leave the server up, serving the next request,
+    // with no unhandled rejection escaping to crash the in-process kernel.
+    const api = fakeApi();
+    const token = server.registerNode({ nodeId: 'crew-1', role: 'crew', api, taskId: 't2' });
+    let unhandled = 0;
+    const onRejection = () => { unhandled++; };
+    process.on('unhandledRejection', onRejection);
+    try {
+      for (let i = 0; i < 20; i++) {
+        const ac = new AbortController();
+        const p = fetch(url, {
+          method: 'POST', signal: ac.signal,
+          headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` },
+          body: JSON.stringify({ jsonrpc: '2.0', id: i, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'x', version: '0.0.1' } } }),
+        }).catch(() => undefined);
+        setTimeout(() => ac.abort(), Math.random() * 3);
+        await p;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+      const client = await connectedClient(url, token);
+      const result = await client.callTool({ name: 'report', arguments: { text: 'still alive' } });
+      expect(textOf(result)).toBe('reported');
+      await client.close();
+    } finally {
+      process.off('unhandledRejection', onRejection);
+    }
+    expect(unhandled).toBe(0);
+  });
+
   it('unregisterNode revokes the token', async () => {
     const api = fakeApi();
     const ctx: McpNodeContext = { nodeId: 'crew-1', role: 'crew', api, taskId: 't2' };

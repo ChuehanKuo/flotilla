@@ -116,9 +116,20 @@ export class FlotaMcpServer {
   private httpServer?: HttpServer;
 
   constructor() {
-    this.app.use(express.json());
-    this.app.post('/mcp', (req, res) => {
-      void this.handlePost(req, res);
+    // WHY 10mb: deliver carries a node's complete work product (a code file or
+    // long report); express.json()'s 100kb default would 413 those before the
+    // route runs, surfacing to the agent as an opaque transport failure.
+    this.app.use(express.json({ limit: '10mb' }));
+    this.app.post('/mcp', async (req, res) => {
+      // WHY the try/catch: a rejected connect/handleRequest (e.g. a
+      // write-after-disconnect race) would otherwise be an unhandled rejection
+      // that terminates the in-process kernel — taking the whole mission down.
+      try {
+        await this.handlePost(req, res);
+      } catch {
+        if (!res.headersSent) res.status(500).json({ error: 'internal' });
+        else res.destroy();
+      }
     });
   }
 
